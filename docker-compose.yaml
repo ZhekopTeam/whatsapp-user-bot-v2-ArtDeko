@@ -2,7 +2,7 @@ x-bot-common: &bot-common
   build:
     context: .
     dockerfile: DockerFile
-  image: wh-user-bot-artdeko:main
+  image: wh-user-bot-v2-artdeko:main
   env_file:
     - .env
   environment:
@@ -16,3 +16,12 @@ services:
   bot:
     <<: *bot-common
     restart: unless-stopped
+
+  auth:
+    <<: *bot-common
+    command: ["auth", "--account-id", "${AUTH_ACCOUNT_ID}"]
+    restart: "no"
+    stdin_open: true
+    tty: true
+    profiles:
+      - auth

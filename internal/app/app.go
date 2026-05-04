@@ -16,12 +16,14 @@ import (
 )
 
 type App struct {
-	settings    *config.Settings
-	runtimeDB   *sql.DB
-	whatsApp    *whatsapp.Manager
-	syncService *sheets.SyncService
-	planner     *scheduler.Planner
-	dispatcher  *scheduler.Dispatcher
+	settings     *config.Settings
+	runtimeDB    *sql.DB
+	whatsApp     *whatsapp.Manager
+	syncService  *sheets.SyncService
+	planner      *scheduler.Planner
+	dispatcher   *scheduler.Dispatcher
+	accountsRepo *sqlite.AccountsRepo
+	sessionsRepo *sqlite.SessionsRepo
 }
 
 func New(ctx context.Context, settings *config.Settings) (*App, error) {
@@ -33,6 +35,7 @@ func New(ctx context.Context, settings *config.Settings) (*App, error) {
 	accountsRepo := sqlite.NewAccountsRepo(runtimeDB)
 	communicationsRepo := sqlite.NewCommunicationsRepo(runtimeDB)
 	jobsRepo := sqlite.NewJobsRepo(runtimeDB)
+	sessionsRepo := sqlite.NewSessionsRepo(runtimeDB)
 	syncStateRepo := sqlite.NewSyncStateRepo(runtimeDB)
 
 	sheetsClient, err := sheets.NewClient(ctx, settings.CredentialsPath, settings.SpreadsheetID)
@@ -55,12 +58,19 @@ func New(ctx context.Context, settings *config.Settings) (*App, error) {
 	}
 
 	manager := whatsapp.NewManager(settings.SessionDBPath)
+	manager.OnStatusChange = func(phone, status string) {
+		if err := accountsRepo.UpdateStatusByPhone(context.Background(), phone, status); err != nil {
+			log.Printf("update account status for phone %s: %v", phone, err)
+		}
+	}
 	sender := whatsapp.NewSender(manager)
 
 	return &App{
-		settings:  settings,
-		runtimeDB: runtimeDB,
-		whatsApp:  manager,
+		settings:     settings,
+		runtimeDB:    runtimeDB,
+		whatsApp:     manager,
+		accountsRepo: accountsRepo,
+		sessionsRepo: sessionsRepo,
 		syncService: sheets.NewSyncService(
 			sheetsClient,
 			settings.AccountsSheetName,

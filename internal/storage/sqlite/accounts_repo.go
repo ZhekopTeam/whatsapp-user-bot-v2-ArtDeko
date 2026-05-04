@@ -84,3 +84,27 @@ func (r *AccountsRepo) GetByID(ctx context.Context, accountID int64) (domain.Acc
 	}
 	return account, nil
 }
+
+func (r *AccountsRepo) UpdateStatus(ctx context.Context, accountID int64, status string) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE accounts
+		SET status = ?, updated_at = ?
+		WHERE account_id = ?
+	`, status, time.Now().UTC(), accountID)
+	if err != nil {
+		return fmt.Errorf("update account status: %w", err)
+	}
+	return nil
+}
+
+func (r *AccountsRepo) UpdateStatusByPhone(ctx context.Context, phone, status string) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE accounts
+		SET status = ?, updated_at = ?
+		WHERE phone = ?
+	`, status, time.Now().UTC(), phone)
+	if err != nil {
+		return fmt.Errorf("update account status by phone: %w", err)
+	}
+	return nil
+}

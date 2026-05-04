@@ -17,6 +17,9 @@ type Manager struct {
 	mu             sync.RWMutex
 	clientsByPhone map[string]*whatsmeow.Client
 	clients        []*whatsmeow.Client
+	// OnStatusChange вызывается при изменении статуса подключения аккаунта.
+	// phone — нормализованный номер из JID, status — одна из констант domain.AccountStatus*.
+	OnStatusChange func(phone, status string)
 }
 
 func NewManager(sessionDBPath string) *Manager {
@@ -45,17 +48,18 @@ func (m *Manager) Start(ctx context.Context) error {
 	clients := make([]*whatsmeow.Client, 0, len(devices))
 	clientsByPhone := make(map[string]*whatsmeow.Client, len(devices))
 	for _, device := range devices {
+		phone := ""
+		if device.ID != nil {
+			phone = normalizePhone(device.ID.User)
+		}
 		client := whatsmeow.NewClient(device, clientLog)
-		client.AddEventHandler(eventHandler)
+		client.AddEventHandler(makeEventHandler(phone, m.OnStatusChange))
 		if err := client.Connect(); err != nil {
 			return fmt.Errorf("connect whatsapp client: %w", err)
 		}
 		clients = append(clients, client)
-		if client.Store != nil && client.Store.ID != nil {
-			phone := normalizePhone(client.Store.ID.User)
-			if phone != "" {
-				clientsByPhone[phone] = client
-			}
+		if phone != "" {
+			clientsByPhone[phone] = client
 		}
 	}
 

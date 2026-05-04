@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log"
 	"os"
 	"os/signal"
@@ -36,7 +37,31 @@ func main() {
 		}
 	}()
 
+	if len(os.Args) > 1 {
+		if err := runCLICommand(ctx, application, os.Args[1:]); err != nil {
+			log.Fatalf("run command: %v", err)
+		}
+		return
+	}
+
 	if err := application.Run(ctx); err != nil && err != context.Canceled {
 		log.Fatalf("run app: %v", err)
+	}
+}
+
+func runCLICommand(ctx context.Context, application *app.App, args []string) error {
+	switch args[0] {
+	case "auth":
+		fs := flag.NewFlagSet("auth", flag.ContinueOnError)
+		accountID := fs.Int64("account-id", 0, "account id from Google Sheets")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *accountID <= 0 {
+			return flag.ErrHelp
+		}
+		return application.AuthAccount(ctx, *accountID)
+	default:
+		return flag.ErrHelp
 	}
 }
