@@ -1,0 +1,18 @@
+x-bot-common: &bot-common
+  build:
+    context: .
+    dockerfile: DockerFile
+  image: wh-user-bot-artdeko:main
+  env_file:
+    - .env
+  environment:
+    TZ: Europe/Moscow
+    BOT_TIMEZONE: Europe/Moscow
+  volumes:
+    - ./sessions:/app/sessions
+    - ./data/service_account.json:/app/data/service_account.json:ro
+
+services:
+  bot:
+    <<: *bot-common
+    restart: unless-stopped
