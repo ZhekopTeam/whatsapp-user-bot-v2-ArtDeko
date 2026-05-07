@@ -17,7 +17,7 @@ const (
 	defaultPlanningInterval    = time.Minute
 	defaultDispatchInterval    = 15 * time.Second
 	defaultDispatchBatchSize   = 10
-	defaultTimezone            = "UTC"
+	defaultTimezone            = "Europe/Moscow"
 	defaultFirstWindowStart    = "10:00"
 	defaultFirstWindowEnd      = "14:00"
 	defaultReplyDelayMinMinute = 40

@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"fmt"
+	"log"
 	"math/rand"
 	"strconv"
 	"strings"
@@ -57,8 +58,16 @@ func (p *Planner) Plan(ctx context.Context, now time.Time) error {
 		return fmt.Errorf("list enabled communications: %w", err)
 	}
 
+	log.Printf("[planner] date=%s found %d enabled communications", day.Format(domain.CommunicationDateLayout), len(communications))
+
 	for _, communication := range communications {
 		if !p.shouldPlanOnDay(communication, day) {
+			log.Printf("[planner] task %d skipped by shouldPlanOnDay (start=%s end=%s countDays=%d)",
+				communication.TaskID,
+				communication.StartDate.Format(domain.CommunicationDateLayout),
+				communication.EndDate.Format(domain.CommunicationDateLayout),
+				communication.CountDays,
+			)
 			continue
 		}
 

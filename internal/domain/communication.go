@@ -26,5 +26,5 @@ func (c Communication) IncludesDate(day time.Time) bool {
 }
 
 func normalizeDate(value time.Time) time.Time {
-	return time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, value.Location())
+	return time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, time.UTC)
 }

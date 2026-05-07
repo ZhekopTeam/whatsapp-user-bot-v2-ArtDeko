@@ -18,7 +18,21 @@ func NewSessionsRepo(db *sql.DB) *SessionsRepo {
 }
 
 func (r *SessionsRepo) Upsert(ctx context.Context, session domain.SessionState) error {
-	_, err := r.db.ExecContext(ctx, `
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin session upsert tx: %w", err)
+	}
+
+	if session.DeviceJID != "" {
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM wa_sessions WHERE device_jid = ? AND account_id != ?
+		`, session.DeviceJID, session.AccountID); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("remove stale session: %w", err)
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO wa_sessions (account_id, device_jid, is_authorized, is_connected, last_connected_at, last_error, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(account_id) DO UPDATE SET
@@ -28,9 +42,10 @@ func (r *SessionsRepo) Upsert(ctx context.Context, session domain.SessionState) 
 			last_connected_at = excluded.last_connected_at,
 			last_error = excluded.last_error,
 			updated_at = excluded.updated_at
-	`, session.AccountID, session.DeviceJID, session.IsAuthorized, session.IsConnected, session.LastConnectedAt, session.LastError, time.Now().UTC())
-	if err != nil {
+	`, session.AccountID, session.DeviceJID, session.IsAuthorized, session.IsConnected, session.LastConnectedAt, session.LastError, time.Now().UTC()); err != nil {
+		_ = tx.Rollback()
 		return fmt.Errorf("upsert session state: %w", err)
 	}
-	return nil
+
+	return tx.Commit()
 }

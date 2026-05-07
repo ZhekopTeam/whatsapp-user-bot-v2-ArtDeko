@@ -46,7 +46,7 @@ func (r *CommunicationsRepo) UpsertMany(ctx context.Context, communications []do
 	}
 	defer stmt.Close()
 
-	now := time.Now().UTC()
+	now := time.Now()
 	for _, communication := range communications {
 		createdAt := communication.CreatedAt
 		if createdAt.IsZero() {

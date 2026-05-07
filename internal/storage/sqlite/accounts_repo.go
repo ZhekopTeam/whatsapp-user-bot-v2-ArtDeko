@@ -28,7 +28,7 @@ func (r *AccountsRepo) UpsertMany(ctx context.Context, accounts []domain.Account
 		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(account_id) DO UPDATE SET
 			phone = excluded.phone,
-			status = CASE WHEN accounts.status IN ('blocked', 'failed') THEN accounts.status ELSE excluded.status END,
+			status = CASE WHEN accounts.status IN ('blocked', 'failed', 'ready', 'disconnected') THEN accounts.status ELSE excluded.status END,
 			updated_at = excluded.updated_at,
 			last_seen_at = excluded.last_seen_at
 	`)

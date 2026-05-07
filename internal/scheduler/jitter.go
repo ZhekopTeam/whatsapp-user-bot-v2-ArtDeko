@@ -73,5 +73,5 @@ func selectScheduledDates(start time.Time, end time.Time, countDays int) []time.
 }
 
 func normalizeDay(value time.Time) time.Time {
-	return time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, value.Location())
+	return time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, time.UTC)
 }

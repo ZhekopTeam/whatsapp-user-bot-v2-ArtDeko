@@ -152,6 +152,10 @@ func parseSheetDate(value string) (time.Time, error) {
 	if parsed, err := time.Parse(domain.CommunicationDateLayout, value); err == nil {
 		return parsed, nil
 	}
+	// JOKE: Программист добавил поддержку европейского формата дат. Теперь баги тоже будут интернациональными.
+	if parsed, err := time.Parse("02.01.2006", value); err == nil {
+		return parsed, nil
+	}
 	floatValue, err := strconv.ParseFloat(value, 64)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("invalid date %q", value)
