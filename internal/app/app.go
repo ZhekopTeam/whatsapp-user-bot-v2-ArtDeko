@@ -24,6 +24,7 @@ type App struct {
 	dispatcher   *scheduler.Dispatcher
 	accountsRepo *sqlite.AccountsRepo
 	sessionsRepo *sqlite.SessionsRepo
+	jobsRepo     *sqlite.JobsRepo
 }
 
 func New(ctx context.Context, settings *config.Settings) (*App, error) {
@@ -71,6 +72,7 @@ func New(ctx context.Context, settings *config.Settings) (*App, error) {
 		whatsApp:     manager,
 		accountsRepo: accountsRepo,
 		sessionsRepo: sessionsRepo,
+		jobsRepo:     jobsRepo,
 		syncService: sheets.NewSyncService(
 			sheetsClient,
 			settings.AccountsSheetName,
@@ -108,6 +110,9 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	if err := a.planner.Plan(ctx, time.Now()); err != nil {
 		return err
+	}
+	if err := a.jobsRepo.ResetSendingJobs(ctx); err != nil {
+		log.Printf("reset sending jobs: %v", err)
 	}
 	if err := a.dispatcher.DispatchDue(ctx, time.Now()); err != nil {
 		log.Printf("initial dispatch skipped: %v", err)

@@ -72,7 +72,7 @@ func (p *Planner) Plan(ctx context.Context, now time.Time) error {
 		}
 
 		runDate := normalizeDay(day)
-		firstMessageAt, err := p.pickFirstMessageTime(runDate)
+		firstMessageAt, err := p.pickFirstMessageTime(runDate, now)
 		if err != nil {
 			return err
 		}
@@ -108,7 +108,7 @@ func (p *Planner) shouldPlanOnDay(communication domain.Communication, day time.T
 	return false
 }
 
-func (p *Planner) pickFirstMessageTime(day time.Time) (time.Time, error) {
+func (p *Planner) pickFirstMessageTime(day time.Time, now time.Time) (time.Time, error) {
 	startHour, startMinute, err := parseClock(p.windowStart)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("parse first message window start: %w", err)
@@ -120,8 +120,14 @@ func (p *Planner) pickFirstMessageTime(day time.Time) (time.Time, error) {
 
 	start := time.Date(day.Year(), day.Month(), day.Day(), startHour, startMinute, 0, 0, p.location)
 	end := time.Date(day.Year(), day.Month(), day.Day(), endHour, endMinute, 0, 0, p.location)
+
+	nowInLocation := now.In(p.location)
+	if nowInLocation.After(start) {
+		start = nowInLocation.Add(time.Minute)
+	}
+
 	if !end.After(start) {
-		return time.Time{}, fmt.Errorf("first message window end must be after start")
+		return time.Time{}, fmt.Errorf("first message window has already passed for today")
 	}
 
 	spanMinutes := int(end.Sub(start).Minutes())

@@ -180,3 +180,15 @@ func (r *JobsRepo) MarkFailed(ctx context.Context, jobID int64, message string) 
 	}
 	return nil
 }
+
+func (r *JobsRepo) ResetSendingJobs(ctx context.Context) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE message_jobs
+		SET status = ?, updated_at = ?
+		WHERE status = ?
+	`, domain.JobStatusPending, time.Now().UTC(), domain.JobStatusSending)
+	if err != nil {
+		return fmt.Errorf("reset sending jobs: %w", err)
+	}
+	return nil
+}

@@ -2,14 +2,14 @@ x-bot-common: &bot-common
   build:
     context: .
     dockerfile: DockerFile
-  image: wh-user-bot-v2-artdeko:main
+  image: zhekop/wh-user-bot-v2-artdeko:main
   env_file:
     - .env
   environment:
     TZ: Europe/Moscow
     BOT_TIMEZONE: Europe/Moscow
   volumes:
-    - ./sessions:/app/sessions
+    - /root/WhatsAppUserBot/sessions:/app/sessions
     - ./data/service_account.json:/app/data/service_account.json:ro
 
 services:
