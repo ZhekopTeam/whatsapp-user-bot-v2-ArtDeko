@@ -25,3 +25,19 @@ services:
     tty: true
     profiles:
       - auth
+
+  tg-bot:
+    build:
+      context: .
+      dockerfile: bot/Dockerfile
+    image: zhekop/wh-user-bot-tg-admin:main
+    env_file:
+      - .env
+    environment:
+      TZ: Europe/Moscow
+      SESSION_DB_PATH: "file:sessions/multi.db?_foreign_keys=on"
+    volumes:
+      - /root/WhatsAppUserBot/sessions:/bot/sessions
+      - /root/WhatsAppUserBot/tg-bot-data:/bot/data
+      - ./data/service_account.json:/bot/data/service_account.json:ro
+    restart: unless-stopped

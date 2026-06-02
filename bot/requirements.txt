@@ -1,0 +1,10 @@
+aiogram==3.28.2
+aiosqlite==0.22.1
+google-auth==2.41.1
+gspread==6.2.1
+pillow==11.3.0
+pydantic==2.13.4
+pydantic-settings==2.14.1
+python-dotenv==1.2.2
+qrcode==8.2
+SQLAlchemy==2.0.49
