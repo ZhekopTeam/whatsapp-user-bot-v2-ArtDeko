@@ -30,11 +30,11 @@ func MapAccounts(rows [][]interface{}) ([]domain.Account, error) {
 	now := time.Now().UTC()
 	for _, row := range rows[1:] {
 		accountID, err := getIntCell(row, accountIdx)
-		if err != nil {
+		if err != nil || accountID <= 0 {
 			continue
 		}
 		phone := normalizePhone(getStringCell(row, phoneIdx))
-		if phone == "" {
+		if phone == "" || len(phone) < 8 || len(phone) > 15 {
 			continue
 		}
 		accounts = append(accounts, domain.Account{
@@ -67,27 +67,27 @@ func MapCommunications(rows [][]interface{}) ([]domain.Communication, error) {
 	now := time.Now().UTC()
 	for _, row := range rows[1:] {
 		taskID, err := getIntCell(row, headers["task_id"])
-		if err != nil {
+		if err != nil || taskID <= 0 {
 			continue
 		}
 		account1, err := getIntCell(row, headers["account_1"])
-		if err != nil {
+		if err != nil || account1 <= 0 {
 			continue
 		}
 		account2, err := getIntCell(row, headers["account_2"])
-		if err != nil {
+		if err != nil || account2 <= 0 || account1 == account2 {
 			continue
 		}
 		startDate, err := parseSheetDate(getStringCell(row, headers["start_date"]))
-		if err != nil {
+		if err != nil || startDate.IsZero() {
 			continue
 		}
 		endDate, err := parseSheetDate(getStringCell(row, headers["end_date"]))
-		if err != nil || endDate.Before(startDate) {
+		if err != nil || endDate.IsZero() || endDate.Before(startDate) {
 			continue
 		}
 		countDays, err := getIntCell(row, headers["count_days"])
-		if err != nil {
+		if err != nil || countDays < 0 {
 			countDays = 0
 		}
 

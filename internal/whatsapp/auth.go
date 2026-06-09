@@ -4,10 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/mdp/qrterminal/v3"
 	"go.mau.fi/whatsmeow"
-	"go.mau.fi/whatsmeow/store/sqlstore"
+	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
 )
 
@@ -22,7 +23,6 @@ const (
 	QREventAlreadyAuthorized QREventType = "already_authorized"
 )
 
-// QREvent — событие авторизации, пригодное для сериализации (NDJSON) и для терминального рендера.
 type QREvent struct {
 	Type    QREventType `json:"event"`
 	Code    string      `json:"code,omitempty"`
@@ -30,9 +30,6 @@ type QREvent struct {
 	Message string      `json:"message,omitempty"`
 }
 
-// AuthorizeByPhone выполняет QR-авторизацию WhatsApp-аккаунта по номеру телефона.
-// Все события (QR-коды, успех, ошибки) передаются через emit. Логи whatsmeow пишутся через logger.
-// Возвращает device JID и флаг, что сессия для номера уже существовала.
 func (m *Manager) AuthorizeByPhone(
 	ctx context.Context,
 	phone string,
@@ -43,7 +40,7 @@ func (m *Manager) AuthorizeByPhone(
 		logger = waLog.Noop
 	}
 
-	container, err := sqlstore.New(ctx, "sqlite3", m.sessionDBPath, logger)
+	container, err := m.GetContainer(ctx, logger)
 	if err != nil {
 		return "", false, fmt.Errorf("create whatsapp sql store: %w", err)
 	}
@@ -65,7 +62,26 @@ func (m *Manager) AuthorizeByPhone(
 
 	device := container.NewDevice()
 	client := whatsmeow.NewClient(device, logger)
-	client.AddEventHandler(eventHandler)
+
+	// connectedCh закрывается, когда WhatsApp подтверждает сессию (events.Connected).
+	// loggedOutCh получает причину, если сервер сразу же отклоняет нас (401).
+	connectedCh := make(chan struct{})
+	loggedOutCh := make(chan string, 1)
+	client.AddEventHandler(func(evt interface{}) {
+		switch v := evt.(type) {
+		case *events.Connected:
+			select {
+			case <-connectedCh:
+			default:
+				close(connectedCh)
+			}
+		case *events.LoggedOut:
+			select {
+			case loggedOutCh <- fmt.Sprintf("%v", v.Reason):
+			default:
+			}
+		}
+	})
 
 	qrChan, err := client.GetQRChannel(ctx)
 	if err != nil {
@@ -77,6 +93,7 @@ func (m *Manager) AuthorizeByPhone(
 	}
 	defer client.Disconnect()
 
+	// Шаг 1: ждём сканирования QR-кода.
 	for evt := range qrChan {
 		switch evt.Event {
 		case "code":
@@ -90,13 +107,13 @@ func (m *Manager) AuthorizeByPhone(
 		}
 	}
 
+	// QR-канал закрылся — код был отсканирован. Проверяем, что данные устройства сохранены.
 	if client.Store == nil || client.Store.ID == nil {
 		return "", false, fmt.Errorf("auth completed without stored device id")
 	}
 
 	if normalizePhone(client.Store.ID.User) != normalizePhone(phone) {
 		scanned := normalizePhone(client.Store.ID.User)
-		// Удаляем ошибочно привязанное устройство, чтобы не засорять multi.db.
 		_ = client.Store.Delete(ctx)
 		return "", false, fmt.Errorf(
 			"authorized phone %s does not match requested account phone %s",
@@ -104,10 +121,24 @@ func (m *Manager) AuthorizeByPhone(
 		)
 	}
 
+	// Шаг 2: ждём подтверждения сессии от сервера WhatsApp (events.Connected).
+	// Если сервер отклонит сессию (401 LoggedOut) или истечёт таймаут — возвращаем ошибку.
+	connCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+	select {
+	case <-connectedCh:
+		// Сессия подтверждена!
+	case reason := <-loggedOutCh:
+		_ = client.Store.Delete(ctx)
+		return "", false, fmt.Errorf("whatsapp rejected session: %s", reason)
+	case <-connCtx.Done():
+		_ = client.Store.Delete(ctx)
+		return "", false, fmt.Errorf("timeout waiting for whatsapp to confirm session")
+	}
+
 	return fmt.Sprint(client.Store.ID), false, nil
 }
 
-// EnsureSession сохраняет терминальное поведение CLI-команды `auth`: рендерит QR в stdout.
 func (m *Manager) EnsureSession(ctx context.Context, phone string) (deviceJID string, alreadyExists bool, err error) {
 	logger := waLog.Stdout("AuthClient", "WARN", true)
 	emit := func(evt QREvent) {
@@ -123,10 +154,25 @@ func (m *Manager) EnsureSession(ctx context.Context, phone string) (deviceJID st
 	return jid, exists, err
 }
 
-// RemoveSession удаляет устройство WhatsApp по номеру телефона из multi.db.
-// Возвращает true, если устройство было найдено и удалено.
 func (m *Manager) RemoveSession(ctx context.Context, phone string) (bool, error) {
-	container, err := sqlstore.New(ctx, "sqlite3", m.sessionDBPath, waLog.Noop)
+	// 1. Отключаем и удаляем клиента из памяти в первую очередь
+	normalized := normalizePhone(phone)
+	m.mu.Lock()
+	client, exists := m.clientsByPhone[normalized]
+	if exists {
+		client.Disconnect()
+		delete(m.clientsByPhone, normalized)
+		for i, c := range m.clients {
+			if c == client {
+				m.clients = append(m.clients[:i], m.clients[i+1:]...)
+				break
+			}
+		}
+	}
+	m.mu.Unlock()
+
+	// 2. Удаляем устройство из базы
+	container, err := m.GetContainer(ctx, waLog.Noop)
 	if err != nil {
 		return false, fmt.Errorf("create whatsapp sql store: %w", err)
 	}
@@ -140,7 +186,7 @@ func (m *Manager) RemoveSession(ctx context.Context, phone string) (bool, error)
 		if device.ID == nil {
 			continue
 		}
-		if normalizePhone(device.ID.User) == normalizePhone(phone) {
+		if normalizePhone(device.ID.User) == normalized {
 			if err := device.Delete(ctx); err != nil {
 				return false, fmt.Errorf("delete device: %w", err)
 			}

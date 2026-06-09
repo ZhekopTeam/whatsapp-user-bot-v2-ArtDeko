@@ -1,7 +1,9 @@
-FROM golang:1.24-bookworm AS builder
+# Multi-stage Dockerfile to build both Go and Python components into a single image.
+
+# --- Go Builder Stage ---
+FROM golang:1.24-bookworm AS go-builder
 
 WORKDIR /src
-
 ENV GOTOOLCHAIN=auto
 
 RUN apt-get update \
@@ -12,10 +14,24 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-
 RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -o /out/wh-user-bot ./
 
-FROM debian:bookworm-slim AS runtime
+# --- Python Builder Stage ---
+FROM python:3.12-slim AS py-builder
+
+WORKDIR /build
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends build-essential \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY bot/requirements.txt .
+RUN python -m venv /opt/venv \
+ && /opt/venv/bin/python -m pip install --upgrade pip \
+ && /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
+
+# --- Runtime Stage ---
+FROM python:3.12-slim AS runtime
 
 WORKDIR /app
 
@@ -23,11 +39,26 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates tzdata \
  && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /out/wh-user-bot /app/wh-user-bot
-COPY --from=builder /src/data/sentences_list.json /app/data/sentences_list.json
+# Copy Go binary and resources
+COPY --from=go-builder /out/wh-user-bot /app/wh-user-bot
+COPY --from=go-builder /src/data/sentences_list.json /app/data/sentences_list.json
 
-RUN mkdir -p /app/data /app/sessions
+# Copy Python virtual env
+COPY --from=py-builder /opt/venv /opt/venv
 
-ENV TZ=UTC
+# Copy Python code to /bot
+COPY bot/ /bot
 
+# Ensure necessary directories exist
+RUN mkdir -p /app/data /app/sessions /bot/data /bot/sessions
+
+# Configure Environment Variables
+ENV PATH="/opt/venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/bot \
+    WHATSAPP_BIN=/app/wh-user-bot \
+    TZ=UTC
+
+# By default, run the Go binary
 ENTRYPOINT ["/app/wh-user-bot"]
+

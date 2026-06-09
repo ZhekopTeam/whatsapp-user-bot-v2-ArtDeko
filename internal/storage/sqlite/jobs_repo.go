@@ -192,3 +192,15 @@ func (r *JobsRepo) ResetSendingJobs(ctx context.Context) error {
 	}
 	return nil
 }
+
+func (r *JobsRepo) RescheduleJob(ctx context.Context, jobID int64, newPlannedAt time.Time) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE message_jobs
+		SET status = ?, planned_at = ?, updated_at = ?
+		WHERE id = ?
+	`, domain.JobStatusPending, newPlannedAt.UTC(), time.Now().UTC(), jobID)
+	if err != nil {
+		return fmt.Errorf("reschedule job %d: %w", jobID, err)
+	}
+	return nil
+}

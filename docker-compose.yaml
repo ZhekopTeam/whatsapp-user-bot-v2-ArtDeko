@@ -1,7 +1,7 @@
 x-bot-common: &bot-common
   build:
     context: .
-    dockerfile: DockerFile
+    dockerfile: Dockerfile
   image: zhekop/wh-user-bot-v2-artdeko:main
   env_file:
     - .env
@@ -15,29 +15,19 @@ x-bot-common: &bot-common
 services:
   bot:
     <<: *bot-common
-    restart: unless-stopped
-
-  auth:
-    <<: *bot-common
-    command: ["auth", "--account-id", "${AUTH_ACCOUNT_ID}"]
-    restart: "no"
-    stdin_open: true
-    tty: true
-    profiles:
-      - auth
-
-  tg-bot:
-    build:
-      context: .
-      dockerfile: bot/Dockerfile
-    image: zhekop/wh-user-bot-tg-admin:main
-    env_file:
-      - .env
+    ports:
+      - "5001:5001"
+    working_dir: /bot
+    entrypoint: ["/bin/sh", "-c", "cd /app && ./wh-user-bot & cd /bot && exec python main.py"]
     environment:
       TZ: Europe/Moscow
-      SESSION_DB_PATH: "file:sessions/multi.db?_foreign_keys=on"
+      WHATSAPP_API_URL: "http://127.0.0.1:5001"
     volumes:
       - /root/WhatsAppUserBot/sessions:/bot/sessions
+      - /root/WhatsAppUserBot/sessions:/app/sessions
       - /root/WhatsAppUserBot/tg-bot-data:/bot/data
       - ./data/service_account.json:/bot/data/service_account.json:ro
+      - ./data/service_account.json:/app/data/service_account.json:ro
     restart: unless-stopped
+
+

@@ -13,6 +13,7 @@ import (
 const (
 	defaultSessionDBPath       = "file:sessions/multi.db?_foreign_keys=on"
 	defaultRuntimeDBPath       = "sessions/runtime.db"
+	defaultAPIPort             = "5001"
 	defaultSyncInterval        = 2 * time.Minute
 	defaultPlanningInterval    = time.Minute
 	defaultDispatchInterval    = 15 * time.Second
@@ -32,6 +33,7 @@ type Settings struct {
 	CommunicationsSheetName string
 	SessionDBPath           string
 	RuntimeDBPath           string
+	APIPort                 string
 	SyncInterval            time.Duration
 	PlanningInterval        time.Duration
 	DispatchInterval        time.Duration
@@ -54,6 +56,7 @@ func Load() (*Settings, error) {
 		CommunicationsSheetName: strings.TrimSpace(os.Getenv("COMMUNICATIONS_SHEET_NAME")),
 		SessionDBPath:           envString("SESSION_DB_PATH", defaultSessionDBPath),
 		RuntimeDBPath:           envString("RUNTIME_DB_PATH", defaultRuntimeDBPath),
+		APIPort:                 envString("API_PORT", defaultAPIPort),
 		SyncInterval:            envDuration("SYNC_INTERVAL", defaultSyncInterval),
 		PlanningInterval:        envDuration("PLANNING_INTERVAL", defaultPlanningInterval),
 		DispatchInterval:        envDuration("DISPATCH_INTERVAL", defaultDispatchInterval),

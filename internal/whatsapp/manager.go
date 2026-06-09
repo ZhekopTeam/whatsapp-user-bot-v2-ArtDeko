@@ -8,13 +8,23 @@ import (
 	"sync"
 
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/waCompanionReg"
+	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	waLog "go.mau.fi/whatsmeow/util/log"
+	"google.golang.org/protobuf/proto"
 )
+
+func init() {
+	store.DeviceProps.Os = proto.String("Windows")
+	store.DeviceProps.PlatformType = waCompanionReg.DeviceProps_CHROME.Enum()
+	store.DeviceProps.RequireFullSync = proto.Bool(false)
+}
 
 type Manager struct {
 	sessionDBPath  string
 	mu             sync.RWMutex
+	container      *sqlstore.Container
 	clientsByPhone map[string]*whatsmeow.Client
 	clients        []*whatsmeow.Client
 	// OnStatusChange вызывается при изменении статуса подключения аккаунта.
@@ -29,8 +39,26 @@ func NewManager(sessionDBPath string) *Manager {
 	}
 }
 
+func (m *Manager) GetContainer(ctx context.Context, logger waLog.Logger) (*sqlstore.Container, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.container != nil {
+		return m.container, nil
+	}
+	container, err := sqlstore.New(ctx, "sqlite3", m.sessionDBPath, logger)
+	if err != nil {
+		return nil, err
+	}
+	m.container = container
+	return container, nil
+}
+
+func (m *Manager) SessionDBPath() string {
+	return m.sessionDBPath
+}
+
 func (m *Manager) Start(ctx context.Context) error {
-	container, err := sqlstore.New(ctx, "sqlite3", m.sessionDBPath, waLog.Stdout("Database", "INFO", true))
+	container, err := m.GetContainer(ctx, waLog.Stdout("Database", "INFO", true))
 	if err != nil {
 		return fmt.Errorf("create whatsapp sql store: %w", err)
 	}
@@ -87,6 +115,82 @@ func (m *Manager) ClientByPhone(phone string) (*whatsmeow.Client, bool) {
 	defer m.mu.RUnlock()
 	client, ok := m.clientsByPhone[normalizePhone(phone)]
 	return client, ok
+}
+
+// ConnectDevice регистрирует и подключает новое устройство в живой пул менеджера.
+func (m *Manager) ConnectDevice(ctx context.Context, device *store.Device) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	phone := ""
+	if device.ID != nil {
+		phone = normalizePhone(device.ID.User)
+	}
+
+	// Если сессия для этого телефона уже была активна, отключаем её
+	if oldClient, ok := m.clientsByPhone[phone]; ok {
+		oldClient.Disconnect()
+		for i, c := range m.clients {
+			if c == oldClient {
+				m.clients = append(m.clients[:i], m.clients[i+1:]...)
+				break
+			}
+		}
+	}
+
+	clientLog := waLog.Stdout("Client", "INFO", true)
+	client := whatsmeow.NewClient(device, clientLog)
+	client.AddEventHandler(makeEventHandler(phone, m.OnStatusChange))
+
+	if err := client.Connect(); err != nil {
+		return fmt.Errorf("connect whatsapp client dynamically: %w", err)
+	}
+
+	m.clients = append(m.clients, client)
+	if phone != "" {
+		m.clientsByPhone[phone] = client
+	}
+
+	log.Printf("Dynamic client registered and connected for phone: %s", phone)
+	return nil
+}
+
+// EnsureClientConnected проверяет, есть ли активная сессия в памяти.
+// Если нет, но сессия существует в multi.db, загружает и запускает её.
+func (m *Manager) EnsureClientConnected(ctx context.Context, phone string) error {
+	normalized := normalizePhone(phone)
+
+	m.mu.RLock()
+	_, exists := m.clientsByPhone[normalized]
+	m.mu.RUnlock()
+
+	if exists {
+		return nil
+	}
+
+	container, err := m.GetContainer(ctx, waLog.Noop)
+	if err != nil {
+		return err
+	}
+
+	devices, err := container.GetAllDevices(ctx)
+	if err != nil {
+		return err
+	}
+
+	var matchDevice *store.Device
+	for _, dev := range devices {
+		if dev.ID != nil && normalizePhone(dev.ID.User) == normalized {
+			matchDevice = dev
+			break
+		}
+	}
+
+	if matchDevice == nil {
+		return fmt.Errorf("device for phone %s not found in store", phone)
+	}
+
+	return m.ConnectDevice(ctx, matchDevice)
 }
 
 func normalizePhone(phone string) string {

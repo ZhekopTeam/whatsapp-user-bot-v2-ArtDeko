@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     )
     # Путь к Go-бинарнику WhatsApp-бота, который выполняет QR-авторизацию.
     WHATSAPP_BIN: str = Field(os.getenv("WHATSAPP_BIN", "/app/wh-user-bot"))
+    WHATSAPP_API_URL: str = Field(
+        os.getenv("WHATSAPP_API_URL", "http://bot:5001")
+    )
     AUTH_TIMEOUT_SEC: int = Field(int(os.getenv("AUTH_TIMEOUT_SEC", "180")))
 
     SPREADSHEET_ID: str = Field(os.getenv("SPREADSHEET_ID", ""))

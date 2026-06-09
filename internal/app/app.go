@@ -7,6 +7,7 @@ import (
 	"log"
 	"time"
 
+	"my-whatsapp-bot/internal/api"
 	"my-whatsapp-bot/internal/config"
 	"my-whatsapp-bot/internal/scheduler"
 	"my-whatsapp-bot/internal/sheets"
@@ -25,6 +26,7 @@ type App struct {
 	accountsRepo *sqlite.AccountsRepo
 	sessionsRepo *sqlite.SessionsRepo
 	jobsRepo     *sqlite.JobsRepo
+	apiServer    *api.Server
 }
 
 func New(ctx context.Context, settings *config.Settings) (*App, error) {
@@ -65,6 +67,7 @@ func New(ctx context.Context, settings *config.Settings) (*App, error) {
 		}
 	}
 	sender := whatsapp.NewSender(manager)
+	apiServer := api.NewServer(manager, settings.APIPort)
 
 	return &App{
 		settings:     settings,
@@ -73,6 +76,7 @@ func New(ctx context.Context, settings *config.Settings) (*App, error) {
 		accountsRepo: accountsRepo,
 		sessionsRepo: sessionsRepo,
 		jobsRepo:     jobsRepo,
+		apiServer:    apiServer,
 		syncService: sheets.NewSyncService(
 			sheetsClient,
 			settings.AccountsSheetName,
@@ -117,6 +121,13 @@ func (a *App) Run(ctx context.Context) error {
 	if err := a.dispatcher.DispatchDue(ctx, time.Now()); err != nil {
 		log.Printf("initial dispatch skipped: %v", err)
 	}
+
+	// Запуск HTTP API-сервера
+	go func() {
+		if err := a.apiServer.Start(ctx); err != nil {
+			log.Printf("api server error: %v", err)
+		}
+	}()
 
 	go a.runLoop(ctx, "sheets-sync", a.settings.SyncInterval, func(loopCtx context.Context) error {
 		return a.syncService.Sync(loopCtx)
