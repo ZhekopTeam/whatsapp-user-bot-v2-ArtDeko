@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"my-whatsapp-bot/internal/storage/sqlite"
+	"my-whatsapp-bot/wa-user-bot/storage/sqlite"
 )
 
 const syncSourceName = "google_sheets"

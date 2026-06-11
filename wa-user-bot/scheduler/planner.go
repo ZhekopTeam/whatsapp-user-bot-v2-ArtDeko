@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"my-whatsapp-bot/internal/domain"
-	"my-whatsapp-bot/internal/storage/sqlite"
-	"my-whatsapp-bot/internal/templates"
+	"my-whatsapp-bot/wa-user-bot/domain"
+	"my-whatsapp-bot/wa-user-bot/storage/sqlite"
+	"my-whatsapp-bot/wa-user-bot/templates"
 )
 
 const dialogueMessageCount = 6

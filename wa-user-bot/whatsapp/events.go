@@ -3,7 +3,7 @@ package whatsapp
 import (
 	"log"
 
-	"my-whatsapp-bot/internal/domain"
+	"my-whatsapp-bot/wa-user-bot/domain"
 
 	"go.mau.fi/whatsmeow/types/events"
 )

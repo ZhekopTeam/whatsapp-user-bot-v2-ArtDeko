@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"my-whatsapp-bot/internal/domain"
+	"my-whatsapp-bot/wa-user-bot/domain"
 )
 
 func MapAccounts(rows [][]interface{}) ([]domain.Account, error) {

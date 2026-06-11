@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"my-whatsapp-bot/internal/domain"
+	"my-whatsapp-bot/wa-user-bot/domain"
 )
 
 type JobsRepo struct {

@@ -10,7 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"my-whatsapp-bot/internal/whatsapp"
+	"my-whatsapp-bot/wa-user-bot/whatsapp"
+
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	waLog "go.mau.fi/whatsmeow/util/log"
 )

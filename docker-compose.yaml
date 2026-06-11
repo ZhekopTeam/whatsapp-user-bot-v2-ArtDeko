@@ -2,14 +2,13 @@ x-bot-common: &bot-common
   build:
     context: .
     dockerfile: Dockerfile
-  image: zhekop/wh-user-bot-v2-artdeko:main
+  image: zhekop/wa-user-bot-v2-artdeko:main
   env_file:
     - .env
   environment:
     TZ: Europe/Moscow
-    BOT_TIMEZONE: Europe/Moscow
   volumes:
-    - /root/WhatsAppUserBot/sessions:/app/sessions
+    - /root/WhatsAppUserBotV2/sessions:/app/sessions
     - ./data/service_account.json:/app/data/service_account.json:ro
 
 services:
@@ -17,17 +16,14 @@ services:
     <<: *bot-common
     ports:
       - "5001:5001"
-    working_dir: /bot
-    entrypoint: ["/bin/sh", "-c", "cd /app && ./wh-user-bot & cd /bot && exec python main.py"]
+    working_dir: /admin-tg-bot
+    entrypoint: [ "/bin/sh", "-c", "cd /app && ./wa-user-bot & cd /admin-tg-bot && exec python main.py" ]
     environment:
-      TZ: Europe/Moscow
       WHATSAPP_API_URL: "http://127.0.0.1:5001"
     volumes:
-      - /root/WhatsAppUserBot/sessions:/bot/sessions
-      - /root/WhatsAppUserBot/sessions:/app/sessions
-      - /root/WhatsAppUserBot/tg-bot-data:/bot/data
-      - ./data/service_account.json:/bot/data/service_account.json:ro
+      - /root/WhatsAppUserBotV2/sessions:/app/sessions
+      - /root/WhatsAppUserBotV2/sessions:/admin-tg-bot/sessions
+      - /root/WhatsAppUserBotV2/tg-bot-data:/admin-tg-bot/data
       - ./data/service_account.json:/app/data/service_account.json:ro
+      - ./data/service_account.json:/admin-tg-bot/data/service_account.json:ro
     restart: unless-stopped
-
-

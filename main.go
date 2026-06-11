@@ -10,9 +10,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"my-whatsapp-bot/internal/app"
-	"my-whatsapp-bot/internal/config"
-	"my-whatsapp-bot/internal/whatsapp"
+	"my-whatsapp-bot/wa-user-bot/app"
+	"my-whatsapp-bot/wa-user-bot/config"
+	"my-whatsapp-bot/wa-user-bot/whatsapp"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -30,7 +30,6 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	// auth-qr — лёгкая команда для Telegram-бота: QR-авторизация по номеру без зависимости от Google Sheets.
 	if len(os.Args) > 1 && os.Args[1] == "auth-qr" {
 		if err := runAuthQR(ctx, settings, os.Args[2:]); err != nil {
 			emitAuthError(err)
@@ -39,7 +38,6 @@ func main() {
 		return
 	}
 
-	// logout-wa — удаление WhatsApp-сессии по номеру (используется Telegram-ботом при удалении аккаунта).
 	if len(os.Args) > 1 && os.Args[1] == "logout-wa" {
 		if err := runLogout(ctx, settings, os.Args[2:]); err != nil {
 			log.Fatalf("logout: %v", err)
@@ -86,7 +84,6 @@ func runCLICommand(ctx context.Context, application *app.App, args []string) err
 	}
 }
 
-// runAuthQR is deprecated. Use the HTTP API.
 func runAuthQR(ctx context.Context, settings *config.Settings, args []string) error {
 	return fmt.Errorf("auth-qr via CLI is deprecated. Please perform auth via the Telegram Bot / HTTP API")
 }
@@ -96,7 +93,6 @@ func emitAuthError(err error) {
 	_ = encoder.Encode(whatsapp.QREvent{Type: whatsapp.QREventError, Message: err.Error()})
 }
 
-// runLogout is deprecated. Use the HTTP API.
 func runLogout(ctx context.Context, settings *config.Settings, args []string) error {
 	return fmt.Errorf("logout-wa via CLI is deprecated. Please perform logout via the Telegram Bot / HTTP API")
 }

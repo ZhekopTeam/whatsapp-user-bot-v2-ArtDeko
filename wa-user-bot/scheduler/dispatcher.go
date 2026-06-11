@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"my-whatsapp-bot/internal/domain"
-	"my-whatsapp-bot/internal/storage/sqlite"
+	"my-whatsapp-bot/wa-user-bot/domain"
+	"my-whatsapp-bot/wa-user-bot/storage/sqlite"
 )
 
 type MessageSender interface {

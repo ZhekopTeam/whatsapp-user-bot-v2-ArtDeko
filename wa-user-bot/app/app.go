@@ -7,13 +7,13 @@ import (
 	"log"
 	"time"
 
-	"my-whatsapp-bot/internal/api"
-	"my-whatsapp-bot/internal/config"
-	"my-whatsapp-bot/internal/scheduler"
-	"my-whatsapp-bot/internal/sheets"
-	"my-whatsapp-bot/internal/storage/sqlite"
-	"my-whatsapp-bot/internal/templates"
-	"my-whatsapp-bot/internal/whatsapp"
+	"my-whatsapp-bot/wa-user-bot/api"
+	"my-whatsapp-bot/wa-user-bot/config"
+	"my-whatsapp-bot/wa-user-bot/scheduler"
+	"my-whatsapp-bot/wa-user-bot/sheets"
+	"my-whatsapp-bot/wa-user-bot/storage/sqlite"
+	"my-whatsapp-bot/wa-user-bot/templates"
+	"my-whatsapp-bot/wa-user-bot/whatsapp"
 )
 
 type App struct {
@@ -122,7 +122,6 @@ func (a *App) Run(ctx context.Context) error {
 		log.Printf("initial dispatch skipped: %v", err)
 	}
 
-	// Запуск HTTP API-сервера
 	go func() {
 		if err := a.apiServer.Start(ctx); err != nil {
 			log.Printf("api server error: %v", err)
