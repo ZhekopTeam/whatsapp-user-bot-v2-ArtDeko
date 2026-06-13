@@ -66,8 +66,8 @@ func MapCommunications(rows [][]interface{}) ([]domain.Communication, error) {
 	communications := make([]domain.Communication, 0, len(rows)-1)
 	now := time.Now().UTC()
 	for _, row := range rows[1:] {
-		taskID, err := getIntCell(row, headers["comm_id"])
-		if err != nil || taskID <= 0 {
+		commID, err := getIntCell(row, headers["comm_id"])
+		if err != nil || commID <= 0 {
 			continue
 		}
 		account1, err := getIntCell(row, headers["account_1"])
@@ -92,7 +92,7 @@ func MapCommunications(rows [][]interface{}) ([]domain.Communication, error) {
 		}
 
 		communications = append(communications, domain.Communication{
-			TaskID:    taskID,
+			CommID:    commID,
 			Account1:  account1,
 			Account2:  account2,
 			StartDate: startDate,

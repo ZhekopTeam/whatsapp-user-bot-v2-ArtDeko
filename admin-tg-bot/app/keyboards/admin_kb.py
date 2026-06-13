@@ -15,7 +15,7 @@ def main_menu_kb() -> InlineKeyboardMarkup:
 def communications_menu_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="➕ Создать цепочку общения", callback_data="comm:create")
-    builder.button(text="← Главное меню", callback_data="menu:main")
+    builder.button(text="← Меню", callback_data="menu:main")
     builder.adjust(1)
     return builder.as_markup()
 

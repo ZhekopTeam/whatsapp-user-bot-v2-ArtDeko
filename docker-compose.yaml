@@ -8,7 +8,7 @@ x-bot-common: &bot-common
   environment:
     TZ: Europe/Moscow
   volumes:
-    - /root/WhatsAppUserBotV2/sessions:/app/sessions
+    - ./sessions:/app/sessions
     - ./data/service_account.json:/app/data/service_account.json:ro
 
 services:
@@ -21,9 +21,9 @@ services:
     environment:
       WHATSAPP_API_URL: "http://127.0.0.1:5001"
     volumes:
-      - /root/WhatsAppUserBotV2/sessions:/app/sessions
-      - /root/WhatsAppUserBotV2/sessions:/admin-tg-bot/sessions
-      - /root/WhatsAppUserBotV2/tg-bot-data:/admin-tg-bot/data
+      - ./sessions:/app/sessions
+      - ./sessions:/admin-tg-bot/sessions
+      - ./data:/admin-tg-bot/data
       - ./data/service_account.json:/app/data/service_account.json:ro
       - ./data/service_account.json:/admin-tg-bot/data/service_account.json:ro
     restart: unless-stopped

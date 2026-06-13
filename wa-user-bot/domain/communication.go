@@ -5,7 +5,7 @@ import "time"
 const CommunicationDateLayout = "2006-01-02"
 
 type Communication struct {
-	TaskID    int64
+	CommID    int64
 	Account1  int64
 	Account2  int64
 	StartDate time.Time

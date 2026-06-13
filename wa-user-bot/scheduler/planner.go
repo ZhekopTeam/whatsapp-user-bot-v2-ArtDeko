@@ -61,7 +61,7 @@ func (p *Planner) Plan(ctx context.Context, now time.Time) error {
 	for _, communication := range communications {
 		if !p.shouldPlanOnDay(communication, day) {
 			log.Printf("[planner] task %d skipped by shouldPlanOnDay (start=%s end=%s countDays=%d)",
-				communication.TaskID,
+				communication.CommID,
 				communication.StartDate.Format(domain.CommunicationDateLayout),
 				communication.EndDate.Format(domain.CommunicationDateLayout),
 				communication.CountDays,
@@ -76,18 +76,18 @@ func (p *Planner) Plan(ctx context.Context, now time.Time) error {
 		}
 		jobs, err := p.buildJobs(communication, runDate, firstMessageAt)
 		if err != nil {
-			return fmt.Errorf("build jobs for task %d: %w", communication.TaskID, err)
+			return fmt.Errorf("build jobs for task %d: %w", communication.CommID, err)
 		}
 
 		run := domain.CommunicationRun{
-			TaskID:    communication.TaskID,
+			CommID:    communication.CommID,
 			RunDate:   runDate,
 			Status:    domain.RunStatusPlanned,
 			CreatedAt: time.Now().UTC(),
 			UpdatedAt: time.Now().UTC(),
 		}
 		if err := p.jobsRepo.CreateRunWithJobs(ctx, run, jobs); err != nil {
-			return fmt.Errorf("create run for task %d: %w", communication.TaskID, err)
+			return fmt.Errorf("create run for task %d: %w", communication.CommID, err)
 		}
 	}
 
@@ -151,7 +151,7 @@ func (p *Planner) buildJobs(communication domain.Communication, runDate time.Tim
 		}
 
 		jobs = append(jobs, domain.Message{
-			TaskID:            communication.TaskID,
+			CommID:            communication.CommID,
 			RunDate:           runDate,
 			StepNo:            index + 1,
 			SenderAccountID:   senderID,

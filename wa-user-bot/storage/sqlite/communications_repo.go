@@ -63,7 +63,7 @@ func (r *CommunicationsRepo) UpsertMany(ctx context.Context, communications []do
 
 		if _, err := stmt.ExecContext(
 			ctx,
-			communication.TaskID,
+			communication.CommID,
 			communication.Account1,
 			communication.Account2,
 			communication.StartDate.Format(domain.CommunicationDateLayout),
@@ -76,7 +76,7 @@ func (r *CommunicationsRepo) UpsertMany(ctx context.Context, communications []do
 			updatedAt,
 		); err != nil {
 			_ = tx.Rollback()
-			return fmt.Errorf("upsert communication %d: %w", communication.TaskID, err)
+			return fmt.Errorf("upsert communication %d: %w", communication.CommID, err)
 		}
 	}
 
@@ -102,7 +102,7 @@ func (r *CommunicationsRepo) ListEnabledForDate(ctx context.Context, day time.Ti
 		var startDate string
 		var endDate string
 		if err := rows.Scan(
-			&communication.TaskID,
+			&communication.CommID,
 			&communication.Account1,
 			&communication.Account2,
 			&startDate,

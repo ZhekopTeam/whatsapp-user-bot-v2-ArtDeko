@@ -97,7 +97,7 @@ func (r *JobsRepo) ClaimDueJobs(ctx context.Context, now time.Time, limit int) (
 		var sentAt sql.NullTime
 		if err := rows.Scan(
 			&job.ID,
-			&job.TaskID,
+			&job.CommID,
 			&runDate,
 			&job.StepNo,
 			&job.SenderAccountID,

@@ -18,7 +18,7 @@ const (
 
 type CommunicationRun struct {
 	ID        int64
-	TaskID    int64
+	CommID    int64
 	RunDate   time.Time
 	Status    string
 	CreatedAt time.Time
