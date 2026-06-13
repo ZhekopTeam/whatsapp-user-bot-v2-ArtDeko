@@ -45,7 +45,7 @@ class AccountRepository:
             return result.scalar_one_or_none()
 
     async def reactivate(
-        self, phone: str, jid: str | None, push_name: str | None, admin_tg_id: int
+        self, phone: str, jid: str | None, admin_tg_id: int
     ) -> None:
         async with get_session_factory()() as session:
             await session.execute(
@@ -53,7 +53,6 @@ class AccountRepository:
                 .where(Account.phone == phone)
                 .values(
                     jid=jid,
-                    push_name=push_name,
                     status="active",
                     admin_tg_id=admin_tg_id,
                 )

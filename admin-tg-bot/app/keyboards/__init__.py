@@ -4,6 +4,9 @@ from .admin_kb import (
     auth_cancel_kb,
     back_to_accounts_kb,
     main_menu_kb,
+    communications_menu_kb,
+    comm_choose_accounts_kb,
+    comm_time_options_kb,
 )
 
 __all__ = [
@@ -12,4 +15,7 @@ __all__ = [
     "auth_cancel_kb",
     "back_to_accounts_kb",
     "main_menu_kb",
+    "communications_menu_kb",
+    "comm_choose_accounts_kb",
+    "comm_time_options_kb",
 ]

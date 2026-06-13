@@ -36,7 +36,7 @@ async def _persist_account(phone: str, jid: str | None, admin_tg_id: int) -> Non
     repo = AccountRepository()
     existing = await repo.get_by_phone(phone)
     if existing:
-        await repo.reactivate(phone, jid, existing.push_name, admin_tg_id)
+        await repo.reactivate(phone, jid, admin_tg_id)
     else:
         await repo.add(
             Account(phone=phone, jid=jid,
@@ -63,7 +63,11 @@ async def handle_phone(message: Message, state: FSMContext, wa_auth: WhatsAppAut
         await message.answer("⚠️ Некорректный номер. Пример: <b>+79991234567</b>")
         return
 
-    phone = "+" + normalize_phone(raw)
+    digits = normalize_phone(raw)
+    if len(digits) == 11 and digits.startswith("8"):
+        digits = "7" + digits[1:]
+
+    phone = "+" + digits
     repo = AccountRepository()
     existing = await repo.get_by_phone(phone)
     if existing and existing.status == "active":

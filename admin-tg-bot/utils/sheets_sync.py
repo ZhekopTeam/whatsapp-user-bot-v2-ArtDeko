@@ -44,7 +44,6 @@ async def sync_accounts() -> None:
     if not _sheets_enabled():
         return
 
-    # Данные читаем в текущем event loop, в executor выносим только блокирующий вызов gspread.
     from utils.database import AccountRepository
 
     accounts = await AccountRepository().get_all()
@@ -53,7 +52,6 @@ async def sync_accounts() -> None:
             str(a.id),
             normalize_phone(a.phone),
             a.jid or "",
-            a.push_name or "",
             a.status,
             a.created_at.strftime("%d.%m.%Y %H:%M") if a.created_at else "",
         ]
@@ -61,8 +59,12 @@ async def sync_accounts() -> None:
     ]
 
     loop = asyncio.get_running_loop()
-    try:
-        await loop.run_in_executor(None, partial(_write_accounts_blocking, rows))
-        logger.info(f"Sheets: synced {len(rows)} accounts")
-    except Exception as e:
-        logger.warning(f"Google Sheets sync failed: {type(e).__name__}: {e}")
+    retries = 3
+    while retries:
+        try:
+            await loop.run_in_executor(None, partial(_write_accounts_blocking, rows))
+            logger.info(f"Sheets: synced {len(rows)} accounts")
+            break
+        except Exception as e:
+            retries -= 1
+            logger.warning(f"Google Sheets sync failed: {type(e).__name__}: {e}")

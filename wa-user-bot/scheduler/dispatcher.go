@@ -63,7 +63,6 @@ func (d *Dispatcher) DispatchDue(ctx context.Context, now time.Time) error {
 			continue
 		}
 
-		// Проверяем, не находится ли аккаунт на "остывании" (cooldown)
 		cooldownUntil := d.getCooldown(senderAccount.Phone)
 		if now.Before(cooldownUntil) {
 			log.Printf("[dispatcher] Sender %s is cooling down. Rescheduling job %d to %v", senderAccount.Phone, job.ID, cooldownUntil)
@@ -73,7 +72,6 @@ func (d *Dispatcher) DispatchDue(ctx context.Context, now time.Time) error {
 			continue
 		}
 
-		// Проверяем статус отправителя
 		if senderAccount.Status != domain.AccountStatusReady {
 			d.markFailed(ctx, job.ID, fmt.Errorf("sender account %s is not ready (status: %s)", senderAccount.Phone, senderAccount.Status))
 			continue
@@ -111,9 +109,8 @@ func (d *Dispatcher) recordFailure(ctx context.Context, phone string) {
 	case 4:
 		cooldown = 1 * time.Hour
 	default:
-		// 5+ consecutive failures: mark status as Disconnected
 		cooldown = 24 * time.Hour
-		d.mu.Unlock() // unlock to call accounts DB updates
+		d.mu.Unlock()
 		log.Printf("[dispatcher] Account %s failed 5 consecutive times, marking as disconnected in DB", phone)
 		if err := d.accountsRepo.UpdateStatusByPhone(ctx, phone, domain.AccountStatusDisconnected); err != nil {
 			log.Printf("Failed to update status for phone %s to disconnected: %v", phone, err)
