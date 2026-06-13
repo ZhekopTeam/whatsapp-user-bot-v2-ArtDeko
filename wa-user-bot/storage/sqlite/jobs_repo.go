@@ -17,7 +17,7 @@ func NewJobsRepo(db *sql.DB) *JobsRepo {
 	return &JobsRepo{db: db}
 }
 
-func (r *JobsRepo) CreateRunWithJobs(ctx context.Context, run domain.CommunicationRun, jobs []domain.MessageJob) error {
+func (r *JobsRepo) CreateRunWithJobs(ctx context.Context, run domain.CommunicationRun, jobs []domain.Message) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin jobs tx: %w", err)
@@ -25,16 +25,16 @@ func (r *JobsRepo) CreateRunWithJobs(ctx context.Context, run domain.Communicati
 
 	runDate := run.RunDate.Format(domain.CommunicationDateLayout)
 	if _, err := tx.ExecContext(ctx, `
-		INSERT OR IGNORE INTO communication_runs (task_id, run_date, status, created_at, updated_at)
+		INSERT OR IGNORE INTO communication_runs (comm_id, run_date, status, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?)
-	`, run.TaskID, runDate, run.Status, run.CreatedAt, run.UpdatedAt); err != nil {
+	`, run.CommID, runDate, run.Status, run.CreatedAt, run.UpdatedAt); err != nil {
 		_ = tx.Rollback()
 		return fmt.Errorf("insert communication run: %w", err)
 	}
 
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT OR IGNORE INTO message_jobs (
-			task_id, run_date, step_no, sender_account_id, receiver_account_id,
+			comm_id, run_date, step_no, sender_account_id, receiver_account_id,
 			planned_at, status, message_text, attempt_count, last_error, sent_at, created_at, updated_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
@@ -47,7 +47,7 @@ func (r *JobsRepo) CreateRunWithJobs(ctx context.Context, run domain.Communicati
 	for _, job := range jobs {
 		if _, err := stmt.ExecContext(
 			ctx,
-			job.TaskID,
+			job.CommID,
 			job.RunDate.Format(domain.CommunicationDateLayout),
 			job.StepNo,
 			job.SenderAccountID,
@@ -69,14 +69,14 @@ func (r *JobsRepo) CreateRunWithJobs(ctx context.Context, run domain.Communicati
 	return tx.Commit()
 }
 
-func (r *JobsRepo) ClaimDueJobs(ctx context.Context, now time.Time, limit int) ([]domain.MessageJob, error) {
+func (r *JobsRepo) ClaimDueJobs(ctx context.Context, now time.Time, limit int) ([]domain.Message, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin claim jobs tx: %w", err)
 	}
 
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id, task_id, run_date, step_no, sender_account_id, receiver_account_id,
+		SELECT id, comm_id, run_date, step_no, sender_account_id, receiver_account_id,
 			planned_at, status, message_text, attempt_count, last_error, sent_at, created_at, updated_at
 		FROM message_jobs
 		WHERE status = ? AND planned_at <= ?
@@ -89,10 +89,10 @@ func (r *JobsRepo) ClaimDueJobs(ctx context.Context, now time.Time, limit int) (
 	}
 	defer rows.Close()
 
-	jobs := make([]domain.MessageJob, 0)
+	jobs := make([]domain.Message, 0)
 	ids := make([]int64, 0)
 	for rows.Next() {
-		var job domain.MessageJob
+		var job domain.Message
 		var runDate string
 		var sentAt sql.NullTime
 		if err := rows.Scan(

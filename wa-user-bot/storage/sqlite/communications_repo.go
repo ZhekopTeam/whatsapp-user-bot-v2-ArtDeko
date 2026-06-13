@@ -25,11 +25,11 @@ func (r *CommunicationsRepo) UpsertMany(ctx context.Context, communications []do
 
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO communications (
-			task_id, account_1, account_2, start_date, end_date, enabled, count_days,
+			comm_id, account_1, account_2, start_date, end_date, enabled, count_days,
 			sheet_hash, synced_at, created_at, updated_at
 		)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(task_id) DO UPDATE SET
+		ON CONFLICT(comm_id) DO UPDATE SET
 			account_1 = excluded.account_1,
 			account_2 = excluded.account_2,
 			start_date = excluded.start_date,
@@ -86,10 +86,10 @@ func (r *CommunicationsRepo) UpsertMany(ctx context.Context, communications []do
 func (r *CommunicationsRepo) ListEnabledForDate(ctx context.Context, day time.Time) ([]domain.Communication, error) {
 	dateValue := day.Format(domain.CommunicationDateLayout)
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT task_id, account_1, account_2, start_date, end_date, enabled, count_days, sheet_hash, synced_at, created_at, updated_at
+		SELECT comm_id, account_1, account_2, start_date, end_date, enabled, count_days, sheet_hash, synced_at, created_at, updated_at
 		FROM communications
 		WHERE enabled = 1 AND start_date <= ? AND end_date >= ?
-		ORDER BY task_id
+		ORDER BY comm_id
 	`, dateValue, dateValue)
 	if err != nil {
 		return nil, fmt.Errorf("query communications: %w", err)

@@ -133,13 +133,13 @@ func (p *Planner) pickFirstMessageTime(day time.Time, now time.Time) (time.Time,
 	return start.Add(time.Duration(offset) * time.Minute), nil
 }
 
-func (p *Planner) buildJobs(communication domain.Communication, runDate time.Time, firstMessageAt time.Time) ([]domain.MessageJob, error) {
+func (p *Planner) buildJobs(communication domain.Communication, runDate time.Time, firstMessageAt time.Time) ([]domain.Message, error) {
 	offsets, err := buildUniqueMinuteOffsets(p.rand, dialogueMessageCount-1, p.replyDelayMin, p.replyDelayMax)
 	if err != nil {
 		return nil, err
 	}
 
-	jobs := make([]domain.MessageJob, 0, dialogueMessageCount)
+	jobs := make([]domain.Message, 0, dialogueMessageCount)
 	plannedAt := firstMessageAt
 	now := time.Now().UTC()
 	for index := 0; index < dialogueMessageCount; index++ {
@@ -150,7 +150,7 @@ func (p *Planner) buildJobs(communication domain.Communication, runDate time.Tim
 			receiverID = communication.Account1
 		}
 
-		jobs = append(jobs, domain.MessageJob{
+		jobs = append(jobs, domain.Message{
 			TaskID:            communication.TaskID,
 			RunDate:           runDate,
 			StepNo:            index + 1,

@@ -56,7 +56,7 @@ func MapCommunications(rows [][]interface{}) ([]domain.Communication, error) {
 	}
 
 	headers := parseHeaders(rows[0])
-	columns := []string{"task_id", "account_1", "account_2", "start_date", "end_date", "enabled", "count_days"}
+	columns := []string{"comm_id", "account_1", "account_2", "start_date", "end_date", "enabled", "count_days"}
 	for _, column := range columns {
 		if _, ok := headers[column]; !ok {
 			return nil, fmt.Errorf("communications sheet must contain %s", column)
@@ -66,7 +66,7 @@ func MapCommunications(rows [][]interface{}) ([]domain.Communication, error) {
 	communications := make([]domain.Communication, 0, len(rows)-1)
 	now := time.Now().UTC()
 	for _, row := range rows[1:] {
-		taskID, err := getIntCell(row, headers["task_id"])
+		taskID, err := getIntCell(row, headers["comm_id"])
 		if err != nil || taskID <= 0 {
 			continue
 		}

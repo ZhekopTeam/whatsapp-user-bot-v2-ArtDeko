@@ -6,7 +6,6 @@ import random
 import aiosqlite
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 from zoneinfo import ZoneInfo
 
@@ -20,14 +19,10 @@ from config import settings
 from utils.database import AccountRepository
 from utils.logger import logger
 from utils.session_repo import mask_phone
+from utils import CreateChain
+
 
 router_comm = Router(name="comm")
-
-
-class CreateChain(StatesGroup):
-    choosing_accounts = State()
-    choosing_start_time = State()
-    waiting_custom_time = State()
 
 
 def get_bot_timezone() -> ZoneInfo:
@@ -65,27 +60,25 @@ def generate_message_from_catalog(sentences_path: str) -> str:
         return "Привет! Как твои дела?"
 
 
-async def insert_jobs_to_db(task_id: int, run_date: str, jobs: list[dict], db_path: str = settings.RUNTIME_DB_PATH) -> None:
+async def insert_jobs_to_db(comm_id: int, run_date: str, jobs: list[dict], db_path: str = settings.RUNTIME_DB_PATH) -> None:
     async with aiosqlite.connect(db_path) as db:
-        # 1. Insert run into communication_runs
         await db.execute(
             """
-            INSERT OR IGNORE INTO communication_runs (task_id, run_date, status, created_at, updated_at)
+            INSERT OR IGNORE INTO communication_runs (comm_id, run_date, status, created_at, updated_at)
             VALUES (?, ?, ?, datetime('now'), datetime('now'))
             """,
-            (task_id, run_date, "planned")
+            (comm_id, run_date, "planned")
         )
-        # 2. Insert jobs into message_jobs
         for job in jobs:
             await db.execute(
                 """
                 INSERT OR IGNORE INTO message_jobs (
-                    task_id, run_date, step_no, sender_account_id, receiver_account_id,
+                    comm_id, run_date, step_no, sender_account_id, receiver_account_id,
                     planned_at, status, message_text, attempt_count, last_error, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, '', datetime('now'), datetime('now'))
                 """,
                 (
-                    job["task_id"],
+                    job["comm_id"],
                     job["run_date"],
                     job["step_no"],
                     job["sender_account_id"],
@@ -258,7 +251,6 @@ async def _create_and_save_chain(message: Message, state: FSMContext, start_time
         await state.clear()
         return
 
-    # Post-process sequence of pairs
     pairs = []
     for i in range(len(selected_ids) - 1):
         pairs.append((selected_ids[i], selected_ids[i+1]))
@@ -266,10 +258,9 @@ async def _create_and_save_chain(message: Message, state: FSMContext, start_time
     if len(selected_ids) > 2:
         pairs.append((selected_ids[-1], selected_ids[0]))
 
-    task_id = int(datetime.now(timezone.utc).timestamp())
+    comm_id = int(datetime.now(timezone.utc).timestamp())
     run_date = start_time.astimezone(get_bot_timezone()).strftime("%Y-%m-%d")
 
-    # Generate message jobs
     jobs = []
     current_time = start_time
     sentences_path = get_sentences_path()
@@ -280,7 +271,7 @@ async def _create_and_save_chain(message: Message, state: FSMContext, start_time
             current_time += timedelta(minutes=offset)
 
         jobs.append({
-            "task_id": task_id,
+            "comm_id": comm_id,
             "run_date": run_date,
             "step_no": step,
             "sender_account_id": sender_id,
@@ -291,12 +282,11 @@ async def _create_and_save_chain(message: Message, state: FSMContext, start_time
         })
 
     try:
-        await insert_jobs_to_db(task_id, run_date, jobs)
+        await insert_jobs_to_db(comm_id, run_date, jobs)
 
-        # Build visual feedback report
         report_lines = [
             f"✅ <b>Цепочка общения успешно создана!</b>",
-            f"Task ID: <code>{task_id}</code>",
+            f"Task ID: <code>{comm_id}</code>",
             f"Всего сообщений: <b>{len(jobs)}</b>",
             f"Начало отправки: <b>{start_time.astimezone(get_bot_timezone()).strftime('%d.%m.%Y %H:%M')}</b>",
             "\n<b>Шаги цепочки:</b>"

@@ -15,7 +15,7 @@ var schemaStatements = []string{
 		last_seen_at TIMESTAMP NOT NULL
 	);`,
 	`CREATE TABLE IF NOT EXISTS communications (
-		task_id INTEGER PRIMARY KEY,
+		comm_id INTEGER PRIMARY KEY,
 		account_1 INTEGER NOT NULL,
 		account_2 INTEGER NOT NULL,
 		start_date TEXT NOT NULL,
@@ -29,16 +29,16 @@ var schemaStatements = []string{
 	);`,
 	`CREATE TABLE IF NOT EXISTS communication_runs (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		task_id INTEGER NOT NULL,
+		comm_id INTEGER NOT NULL,
 		run_date TEXT NOT NULL,
 		status TEXT NOT NULL,
 		created_at TIMESTAMP NOT NULL,
 		updated_at TIMESTAMP NOT NULL,
-		UNIQUE(task_id, run_date)
+		UNIQUE(comm_id, run_date)
 	);`,
 	`CREATE TABLE IF NOT EXISTS message_jobs (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		task_id INTEGER NOT NULL,
+		comm_id INTEGER NOT NULL,
 		run_date TEXT NOT NULL,
 		step_no INTEGER NOT NULL,
 		sender_account_id INTEGER NOT NULL,
@@ -51,7 +51,7 @@ var schemaStatements = []string{
 		sent_at TIMESTAMP,
 		created_at TIMESTAMP NOT NULL,
 		updated_at TIMESTAMP NOT NULL,
-		UNIQUE(task_id, run_date, step_no)
+		UNIQUE(comm_id, run_date, step_no)
 	);`,
 	`CREATE TABLE IF NOT EXISTS wa_sessions (
 		account_id INTEGER PRIMARY KEY,

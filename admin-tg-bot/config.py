@@ -29,17 +29,13 @@ class Settings(BaseSettings):
         os.getenv("DATABASE_PATH", "data/wa_bot_accounts.db")
     )
 
-    # Путь к рантайм-хранилищу Go-бота прогрева (база данных с задачами и логами)
     RUNTIME_DB_PATH: str = Field(
         os.getenv("RUNTIME_DB_PATH", "sessions/runtime.db")
     )
 
-    # Путь к whatsmeow-хранилищу. Должен совпадать с SESSION_DB_PATH Go-бота прогрева,
-    # так как QR-авторизация пишет сессию именно туда.
     SESSION_DB_PATH: str = Field(
         os.getenv("SESSION_DB_PATH", "file:sessions/multi.db?_foreign_keys=on")
     )
-    # Путь к Go-бинарнику WhatsApp-бота, который выполняет QR-авторизацию.
     WHATSAPP_BIN: str = Field(os.getenv("WHATSAPP_BIN", "/app/wh-user-bot"))
     WHATSAPP_API_URL: str = Field(
         os.getenv("WHATSAPP_API_URL", "http://bot:5001")
@@ -55,7 +51,6 @@ class Settings(BaseSettings):
     )
     SHEET_ACCOUNTS: str = Field(
         os.getenv("SHEET_ACCOUNTS", "WhatsApp Accounts"))
-    # Колонки A:B (account_id, ph_number) читает Go-бот; остальные — для наглядности.
     ACCOUNTS_HEADER: list[str] = Field(
         os.getenv(
             "ACCOUNTS_HEADER",

@@ -25,9 +25,9 @@ type CommunicationRun struct {
 	UpdatedAt time.Time
 }
 
-type MessageJob struct {
+type Message struct {
 	ID                int64
-	TaskID            int64
+	CommID            int64
 	RunDate           time.Time
 	StepNo            int
 	SenderAccountID   int64

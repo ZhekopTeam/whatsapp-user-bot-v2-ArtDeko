@@ -4,3 +4,9 @@ from aiogram.fsm.state import State, StatesGroup
 class AddAccount(StatesGroup):
     waiting_phone = State()
     waiting_qr = State()
+
+
+class CreateChain(StatesGroup):
+    choosing_accounts = State()
+    choosing_start_time = State()
+    waiting_custom_time = State()
