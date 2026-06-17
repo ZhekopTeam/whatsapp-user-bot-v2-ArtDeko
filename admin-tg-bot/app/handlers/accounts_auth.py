@@ -117,23 +117,22 @@ async def handle_phone(message: Message, state: FSMContext, wa_auth: WhatsAppAut
 
             elif etype in ("timeout", "error"):
                 terminal = True
-                reason = event.get("message") or "неизвестная ошибка"
                 await _show_result(
-                    message, photo_msg, status_msg, f"❌ Не удалось авторизовать: {reason}"
+                    message, photo_msg, status_msg, f"❌ Не удалось авторизовать"
                 )
                 break
     except (PermissionError, RuntimeError) as e:
         terminal = True
-        await _show_result(message, photo_msg, status_msg, f"⚠️ {e}")
-    except Exception as e:  # noqa: BLE001
+        await _show_result(message, photo_msg, status_msg, f"❌ Не удалось авторизовать")
+        logger.info(f"WhatsApp auth error: {e}")
+    except Exception as e:
         terminal = True
         logger.exception(f"WhatsApp auth error: {e}")
-        await _show_result(message, photo_msg, status_msg, f"❌ Ошибка авторизации: {e}")
+        await _show_result(message, photo_msg, status_msg, f"❌ Не удалось авторизовать")
     finally:
         await state.clear()
 
     if not terminal:
-        # Поток завершился без финального события (например, отмена) — UI обновит обработчик отмены.
         logger.info("WhatsApp auth stream finished without terminal event")
 
 

@@ -7,23 +7,26 @@ x-bot-common: &bot-common
     - .env
   environment:
     TZ: Europe/Moscow
-  volumes:
-    - ./sessions:/app/sessions
-    - ./data/service_account.json:/app/data/service_account.json:ro
-
 services:
-  bot:
+  api:
     <<: *bot-common
+    working_dir: /app
+    entrypoint: ["/app/wa-user-bot"]
     ports:
       - "5001:5001"
-    working_dir: /admin-tg-bot
-    entrypoint: [ "/bin/sh", "-c", "cd /app && ./wa-user-bot & cd /admin-tg-bot && exec python main.py" ]
-    environment:
-      WHATSAPP_API_URL: "http://127.0.0.1:5001"
     volumes:
       - ./sessions:/app/sessions
+      - ./data:/app/data
+    restart: unless-stopped
+  bot:
+    <<: *bot-common
+    working_dir: /admin-tg-bot
+    entrypoint: ["python", "main.py"]
+    environment:
+      WHATSAPP_API_URL: "http://api:5001"
+    volumes:
       - ./sessions:/admin-tg-bot/sessions
       - ./data:/admin-tg-bot/data
-      - ./data/service_account.json:/app/data/service_account.json:ro
-      - ./data/service_account.json:/admin-tg-bot/data/service_account.json:ro
+    depends_on:
+      - api
     restart: unless-stopped

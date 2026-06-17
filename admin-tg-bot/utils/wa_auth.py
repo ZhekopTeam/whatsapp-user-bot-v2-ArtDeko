@@ -42,6 +42,7 @@ class WhatsAppAuth:
     def __init__(self) -> None:
         self._session: Optional[aiohttp.ClientSession] = None
         self._response: Optional[aiohttp.ClientResponse] = None
+        self._cancelled: bool = False
 
     @property
     def busy(self) -> bool:
@@ -55,6 +56,7 @@ class WhatsAppAuth:
                 "Авторизация уже выполняется, дождитесь её завершения")
 
         self._session = aiohttp.ClientSession()
+        self._cancelled = False
         logger.info(f"HTTP auth stream starting for {phone} (admin={admin_tg_id})")
 
         try:
@@ -82,15 +84,25 @@ class WhatsAppAuth:
                 yield event
 
         except asyncio.TimeoutError:
+            if self._cancelled:
+                return
             logger.warning("HTTP auth stream timed out")
             yield {"event": "timeout", "message": "Время авторизации истекло"}
         except aiohttp.ClientError as e:
+            if self._cancelled:
+                return
             logger.warning(f"HTTP auth ClientError: {e}")
             yield {"event": "error", "message": f"Ошибка соединения: {e}"}
+        except Exception as e:
+            if self._cancelled:
+                return
+            logger.exception(f"HTTP auth unexpected error: {e}")
+            yield {"event": "error", "message": f"Внутренняя ошибка: {e}"}
         finally:
             await self._close()
 
     async def cancel(self) -> None:
+        self._cancelled = True
         await self._close()
 
     async def _close(self) -> None:
