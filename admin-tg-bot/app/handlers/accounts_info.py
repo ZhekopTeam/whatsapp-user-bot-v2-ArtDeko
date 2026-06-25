@@ -4,6 +4,7 @@ from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
+from aiogram.fsm.context import FSMContext
 
 from app.keyboards import account_detail_kb, accounts_list_kb, main_menu_kb
 from config import settings
@@ -33,9 +34,10 @@ async def _accounts_text() -> str:
 
 
 @router_info.message(Command("start"))
-async def cmd_start(message: Message) -> None:
+async def cmd_start(message: Message, state: FSMContext) -> None:
     if not is_admin(message.from_user.id):
         return
+    await state.clear()
     await message.answer(_menu_text(), reply_markup=main_menu_kb())
 
 

@@ -51,7 +51,9 @@ async def cb_add_account(callback: CallbackQuery, state: FSMContext) -> None:
         return
     await state.set_state(AddAccount.waiting_phone)
     await callback.message.edit_text(
-        "Введите номер телефона аккаунта в формате <b>+79991234567</b>"
+        "Введите номер телефона аккаунта в формате <b>+79991234567</b>.\n"
+        "Можно также ввести номер, начинающийся с 8 — бот примет его автоматически.",
+        reply_markup=auth_cancel_kb()
     )
     await callback.answer()
 
