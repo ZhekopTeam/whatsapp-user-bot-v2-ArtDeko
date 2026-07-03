@@ -13,6 +13,8 @@ import (
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	waLog "go.mau.fi/whatsmeow/util/log"
 	"google.golang.org/protobuf/proto"
+
+	"my-whatsapp-bot/wa-user-bot/domain"
 )
 
 func init() {
@@ -21,15 +23,21 @@ func init() {
 	store.DeviceProps.RequireFullSync = proto.Bool(false)
 }
 
+// ProxyLookup is a function that returns the proxy for a given phone number.
+// It returns nil if no proxy is assigned.
+type ProxyLookup func(ctx context.Context, phone string) (*domain.Proxy, error)
+
 type Manager struct {
 	sessionDBPath  string
 	mu             sync.RWMutex
 	container      *sqlstore.Container
 	clientsByPhone map[string]*whatsmeow.Client
 	clients        []*whatsmeow.Client
-	// OnStatusChange вызывается при изменении статуса подключения аккаунта.
-	// phone — нормализованный номер из JID, status — одна из констант domain.AccountStatus*.
+	// OnStatusChange is called when a connection status changes.
+	// phone — normalised number from JID, status — one of domain.AccountStatus* constants.
 	OnStatusChange func(phone, status string)
+	// ProxyLookup optionally returns the proxy to use for a given phone.
+	ProxyLookup ProxyLookup
 }
 
 func NewManager(sessionDBPath string) *Manager {
@@ -82,6 +90,21 @@ func (m *Manager) Start(ctx context.Context) error {
 		}
 		client := whatsmeow.NewClient(device, clientLog)
 		client.AddEventHandler(makeEventHandler(phone, m.OnStatusChange))
+
+		// Apply proxy if one is assigned to this phone
+		if m.ProxyLookup != nil && phone != "" {
+			if proxy, err := m.ProxyLookup(ctx, phone); err != nil {
+				log.Printf("proxy lookup for %s: %v (continuing without proxy)", phone, err)
+			} else if proxy != nil {
+				proxyURL := proxy.URL()
+				if err := client.SetProxyAddress(proxyURL); err != nil {
+					log.Printf("set proxy for %s: %v", phone, err)
+				} else {
+					log.Printf("proxy set for %s: %s://%s:%d", phone, proxy.ProxyType, proxy.Host, proxy.Port)
+				}
+			}
+		}
+
 		if err := client.Connect(); err != nil {
 			return fmt.Errorf("connect whatsapp client: %w", err)
 		}
@@ -141,6 +164,20 @@ func (m *Manager) ConnectDevice(ctx context.Context, device *store.Device) error
 	clientLog := waLog.Stdout("Client", "INFO", true)
 	client := whatsmeow.NewClient(device, clientLog)
 	client.AddEventHandler(makeEventHandler(phone, m.OnStatusChange))
+
+	// Apply proxy if one is assigned to this phone
+	if m.ProxyLookup != nil && phone != "" {
+		if proxy, err := m.ProxyLookup(ctx, phone); err != nil {
+			log.Printf("proxy lookup for %s: %v (continuing without proxy)", phone, err)
+		} else if proxy != nil {
+			proxyURL := proxy.URL()
+			if err := client.SetProxyAddress(proxyURL); err != nil {
+				log.Printf("set proxy for %s: %v", phone, err)
+			} else {
+				log.Printf("proxy set for %s (dynamic): %s://%s:%d", phone, proxy.ProxyType, proxy.Host, proxy.Port)
+			}
+		}
+	}
 
 	if err := client.Connect(); err != nil {
 		return fmt.Errorf("connect whatsapp client dynamically: %w", err)

@@ -7,6 +7,10 @@ from .admin_kb import (
     communications_menu_kb,
     comm_choose_accounts_kb,
     comm_time_options_kb,
+    proxy_list_kb,
+    proxy_detail_kb,
+    proxy_cancel_kb,
+    proxy_assign_list_kb,
 )
 
 __all__ = [
@@ -18,4 +22,8 @@ __all__ = [
     "communications_menu_kb",
     "comm_choose_accounts_kb",
     "comm_time_options_kb",
+    "proxy_list_kb",
+    "proxy_detail_kb",
+    "proxy_cancel_kb",
+    "proxy_assign_list_kb",
 ]

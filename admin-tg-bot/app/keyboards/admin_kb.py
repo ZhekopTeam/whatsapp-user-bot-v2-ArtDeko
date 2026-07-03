@@ -8,6 +8,7 @@ def main_menu_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="📱 Аккаунты WhatsApp", callback_data="menu:accounts")
     builder.button(text="🔄 Схемы общения", callback_data="menu:communications")
+    builder.button(text="🌐 Прокси", callback_data="menu:proxy")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -54,7 +55,6 @@ def comm_time_options_kb() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-
 def accounts_list_kb(accounts: list[tuple[int, str, str]]) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for account_id, phone, status in accounts:
@@ -69,8 +69,18 @@ def accounts_list_kb(accounts: list[tuple[int, str, str]]) -> InlineKeyboardMark
     return builder.as_markup()
 
 
-def account_detail_kb(account_id: int) -> InlineKeyboardMarkup:
+def account_detail_kb(account_id: int, proxy_id: str | None = None) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
+    if proxy_id:
+        builder.button(
+            text="🔌 Отвязать прокси",
+            callback_data=f"proxy_unassign:{account_id}",
+        )
+    else:
+        builder.button(
+            text="🌐 Привязать прокси",
+            callback_data=f"proxy_assign_list:{account_id}",
+        )
     builder.button(
         text="🗑 Удалить аккаунт",
         callback_data=f"delete_account:{account_id}",
@@ -89,4 +99,52 @@ def auth_cancel_kb() -> InlineKeyboardMarkup:
 def back_to_accounts_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="← К списку аккаунтов", callback_data="menu:accounts")
+    return builder.as_markup()
+
+
+# ── Proxy keyboards ────────────────────────────────────────────────────────────
+
+def proxy_list_kb(proxies: list[tuple[str, str, str, str, int, bool]]) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for proxy_id, name, ptype, host, port, is_busy in proxies:
+        status = "🔴 [Занят] " if is_busy else "🟢 [Свободен] "
+        builder.button(
+            text=f"{status}{name} ({ptype}://{host}:{port})",
+            callback_data=f"proxy_detail:{proxy_id}",
+        )
+    builder.button(text="➕ Добавить прокси", callback_data="proxy_add")
+    builder.button(text="← Меню", callback_data="menu:main")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def proxy_detail_kb(proxy_id: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🗑 Удалить", callback_data=f"proxy_del:{proxy_id}")
+    builder.button(text="← Назад", callback_data="menu:proxy")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def proxy_cancel_kb() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✖️ Отмена", callback_data="menu:proxy")
+    return builder.as_markup()
+
+
+def proxy_assign_list_kb(
+    proxies: list[tuple[str, str, str, str, int, bool]],
+    account_id: int,
+) -> InlineKeyboardMarkup:
+    """List of free proxies to assign to an account."""
+    builder = InlineKeyboardBuilder()
+    for proxy_id, name, ptype, host, port, is_busy in proxies:
+        if is_busy:
+            continue
+        builder.button(
+            text=f"🟢 {name} ({ptype}://{host}:{port})",
+            callback_data=f"proxy_assign:{account_id}:{proxy_id}",
+        )
+    builder.button(text="← Назад", callback_data=f"account:{account_id}")
+    builder.adjust(1)
     return builder.as_markup()

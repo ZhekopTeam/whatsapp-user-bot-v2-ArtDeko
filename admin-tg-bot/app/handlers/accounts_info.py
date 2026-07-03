@@ -76,12 +76,24 @@ async def cb_account_detail(callback: CallbackQuery) -> None:
         return
     _, phone, status = target
 
+    # Check assigned proxy
+    from utils.database import AccountRepository, ProxyRepository
+    account = await AccountRepository().get_by_id(account_id)
+    proxy_text = ""
+    proxy_id = None
+    if account and account.proxy_id:
+        proxy_id = account.proxy_id
+        proxy = await ProxyRepository().get_by_id(proxy_id)
+        if proxy:
+            proxy_text = f"\n🌐 Прокси: <b>{proxy.name}</b> (<code>{proxy.host}:{proxy.port}</code>)"
+
     status_emoji = "✅" if status == "active" else "⚠️"
     text = (
         f"Статус: <code>{status}</code> {status_emoji}\n\n"
         f"Номер: <b>{mask_phone(phone)}</b>"
+        f"{proxy_text}"
     )
-    await callback.message.edit_text(text, reply_markup=account_detail_kb(account_id))
+    await callback.message.edit_text(text, reply_markup=account_detail_kb(account_id, proxy_id))
     await callback.answer()
 
 

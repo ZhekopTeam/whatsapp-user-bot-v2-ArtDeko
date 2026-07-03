@@ -9,6 +9,7 @@ import (
 
 	"my-whatsapp-bot/wa-user-bot/api"
 	"my-whatsapp-bot/wa-user-bot/config"
+	"my-whatsapp-bot/wa-user-bot/domain"
 	"my-whatsapp-bot/wa-user-bot/scheduler"
 	"my-whatsapp-bot/wa-user-bot/sheets"
 	"my-whatsapp-bot/wa-user-bot/storage/sqlite"
@@ -17,16 +18,17 @@ import (
 )
 
 type App struct {
-	settings     *config.Settings
-	runtimeDB    *sql.DB
-	whatsApp     *whatsapp.Manager
-	syncService  *sheets.SyncService
-	planner      *scheduler.Planner
-	dispatcher   *scheduler.Dispatcher
-	accountsRepo *sqlite.AccountsRepo
-	sessionsRepo *sqlite.SessionsRepo
-	jobsRepo     *sqlite.JobsRepo
-	apiServer    *api.Server
+	settings      *config.Settings
+	runtimeDB     *sql.DB
+	whatsApp      *whatsapp.Manager
+	syncService   *sheets.SyncService
+	planner       *scheduler.Planner
+	dispatcher    *scheduler.Dispatcher
+	accountsRepo  *sqlite.AccountsRepo
+	sessionsRepo  *sqlite.SessionsRepo
+	jobsRepo      *sqlite.JobsRepo
+	apiServer     *api.Server
+	adminProxyRepo *sqlite.AdminProxyRepo
 }
 
 func New(ctx context.Context, settings *config.Settings) (*App, error) {
@@ -66,17 +68,30 @@ func New(ctx context.Context, settings *config.Settings) (*App, error) {
 			log.Printf("update account status for phone %s: %v", phone, err)
 		}
 	}
+
+	// Wire proxy lookup from admin DB (non-fatal if DB is unavailable)
+	adminProxyRepo, proxyErr := sqlite.NewAdminProxyRepo(settings.AdminDBPath)
+	if proxyErr != nil {
+		log.Printf("admin proxy db unavailable, running without proxy support: %v", proxyErr)
+	}
+	if adminProxyRepo != nil {
+		manager.ProxyLookup = func(ctx context.Context, phone string) (*domain.Proxy, error) {
+			return adminProxyRepo.GetProxyForPhone(ctx, phone)
+		}
+	}
+
 	sender := whatsapp.NewSender(manager)
 	apiServer := api.NewServer(manager, settings.APIPort)
 
 	return &App{
-		settings:     settings,
-		runtimeDB:    runtimeDB,
-		whatsApp:     manager,
-		accountsRepo: accountsRepo,
-		sessionsRepo: sessionsRepo,
-		jobsRepo:     jobsRepo,
-		apiServer:    apiServer,
+		settings:       settings,
+		runtimeDB:      runtimeDB,
+		whatsApp:       manager,
+		accountsRepo:   accountsRepo,
+		sessionsRepo:   sessionsRepo,
+		jobsRepo:       jobsRepo,
+		apiServer:      apiServer,
+		adminProxyRepo: adminProxyRepo,
 		syncService: sheets.NewSyncService(
 			sheetsClient,
 			settings.AccountsSheetName,
@@ -144,6 +159,9 @@ func (a *App) Run(ctx context.Context) error {
 
 func (a *App) Close() error {
 	a.whatsApp.Close()
+	if a.adminProxyRepo != nil {
+		a.adminProxyRepo.Close()
+	}
 	if a.runtimeDB != nil {
 		return a.runtimeDB.Close()
 	}

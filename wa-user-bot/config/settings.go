@@ -33,6 +33,7 @@ type Settings struct {
 	CommunicationsSheetName string
 	SessionDBPath           string
 	RuntimeDBPath           string
+	AdminDBPath             string
 	APIPort                 string
 	SyncInterval            time.Duration
 	PlanningInterval        time.Duration
@@ -56,6 +57,7 @@ func Load() (*Settings, error) {
 		CommunicationsSheetName: strings.TrimSpace(os.Getenv("COMMUNICATIONS_SHEET_NAME")),
 		SessionDBPath:           envString("SESSION_DB_PATH", defaultSessionDBPath),
 		RuntimeDBPath:           envString("RUNTIME_DB_PATH", defaultRuntimeDBPath),
+		AdminDBPath:             envString("ADMIN_DB_PATH", "data/wa_bot_accounts.db"),
 		APIPort:                 envString("API_PORT", defaultAPIPort),
 		SyncInterval:            envDuration("SYNC_INTERVAL", defaultSyncInterval),
 		PlanningInterval:        envDuration("PLANNING_INTERVAL", defaultPlanningInterval),
