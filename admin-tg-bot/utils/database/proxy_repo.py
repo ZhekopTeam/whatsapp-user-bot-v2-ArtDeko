@@ -38,13 +38,13 @@ class ProxyRepository:
             await session.commit()
             return result.rowcount > 0
 
-    async def get_account_for_proxy(self, proxy_id: str) -> Account | None:
-        """Returns the account currently using this proxy, if any."""
+    async def get_accounts_for_proxy(self, proxy_id: str) -> list[Account]:
+        """Returns all accounts currently using this proxy."""
         async with get_session_factory()() as session:
             result = await session.execute(
                 select(Account).where(Account.proxy_id == proxy_id)
             )
-            return result.scalar_one_or_none()
+            return list(result.scalars().all())
 
     async def assign_to_account(self, account_id: int, proxy_id: str | None) -> None:
         """Assign (or unassign if proxy_id is None) a proxy to an account."""

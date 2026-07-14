@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from sqlalchemy import event
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -43,3 +43,15 @@ async def init_db() -> None:
 
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+        def _migrate_db(connection):
+            res = connection.execute(text("PRAGMA table_info(accounts)"))
+            columns = [row[1] for row in res.fetchall()]
+            if "proxy_id" not in columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE accounts ADD COLUMN proxy_id VARCHAR(36) REFERENCES proxies(id) ON DELETE SET NULL"
+                    )
+                )
+
+        await conn.run_sync(_migrate_db)

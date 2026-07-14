@@ -15,3 +15,7 @@ class CreateChain(StatesGroup):
 class AddProxy(StatesGroup):
     waiting_proxy_input = State()
     waiting_proxy_name = State()
+
+
+class AddAdmin(StatesGroup):
+    waiting_tg_id = State()

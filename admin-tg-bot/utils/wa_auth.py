@@ -8,6 +8,7 @@ import aiohttp
 import qrcode
 
 from config import settings
+from utils.access import is_admin
 from utils.logger import logger
 
 
@@ -49,7 +50,7 @@ class WhatsAppAuth:
         return self._session is not None
 
     async def stream(self, admin_tg_id: int, phone: str) -> AsyncIterator[dict]:
-        if admin_tg_id not in settings.admins_list:
+        if not is_admin(admin_tg_id):
             raise PermissionError("User is not admin")
         if self.busy:
             raise RuntimeError(

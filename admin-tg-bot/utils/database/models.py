@@ -45,3 +45,15 @@ class Account(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
     )
+
+
+class Admin(Base):
+    """Runtime admins (not owners from .env ADMINS)."""
+
+    __tablename__ = "admins"
+
+    tg_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )

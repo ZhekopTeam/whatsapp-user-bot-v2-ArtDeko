@@ -16,6 +16,7 @@ from app.keyboards import (
     main_menu_kb,
 )
 from config import settings
+from utils.access import is_admin, is_owner
 from utils.database import AccountRepository
 from utils.logger import logger
 from utils.session_repo import mask_phone
@@ -93,6 +94,9 @@ async def insert_jobs_to_db(comm_id: int, run_date: str, jobs: list[dict], db_pa
 
 @router_comm.callback_query(F.data == "menu:communications")
 async def cb_communications_menu(callback: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(callback.from_user.id):
+        await callback.answer()
+        return
     await state.clear()
     await callback.message.edit_text(
         "🔄 <b>Схемы общения</b>\n\n"
@@ -104,6 +108,9 @@ async def cb_communications_menu(callback: CallbackQuery, state: FSMContext) -> 
 
 @router_comm.callback_query(F.data == "comm:create")
 async def cb_create_chain(callback: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(callback.from_user.id):
+        await callback.answer()
+        return
     active_accounts = await AccountRepository().get_active()
     if len(active_accounts) < 2:
         await callback.answer("⚠️ Для создания схемы общения нужно как минимум 2 активных аккаунта!", show_alert=True)
@@ -300,9 +307,15 @@ async def _create_and_save_chain(message: Message, state: FSMContext, start_time
                 f"• {time_str}: <b>{mask_phone(sender_phone)}</b> ➡️ <b>{mask_phone(receiver_phone)}</b>"
             )
 
-        await message.answer("\n".join(report_lines), reply_markup=main_menu_kb())
+        await message.answer(
+            "\n".join(report_lines),
+            reply_markup=main_menu_kb(show_admins=is_owner(message.from_user.id)),
+        )
     except Exception as e:
         logger.exception("Failed to save communication chain to SQLite")
-        await message.answer(f"❌ Ошибка сохранения цепочки в базу данных: {e}", reply_markup=main_menu_kb())
+        await message.answer(
+            f"❌ Ошибка сохранения цепочки в базу данных: {e}",
+            reply_markup=main_menu_kb(show_admins=is_owner(message.from_user.id)),
+        )
 
     await state.clear()

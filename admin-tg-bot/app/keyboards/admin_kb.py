@@ -4,11 +4,13 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from utils.session_repo import mask_phone
 
 
-def main_menu_kb() -> InlineKeyboardMarkup:
+def main_menu_kb(*, show_admins: bool = False) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="📱 Аккаунты WhatsApp", callback_data="menu:accounts")
     builder.button(text="🔄 Схемы общения", callback_data="menu:communications")
     builder.button(text="🌐 Прокси", callback_data="menu:proxy")
+    if show_admins:
+        builder.button(text="👥 Админы", callback_data="menu:admins")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -102,14 +104,12 @@ def back_to_accounts_kb() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-# ── Proxy keyboards ────────────────────────────────────────────────────────────
-
-def proxy_list_kb(proxies: list[tuple[str, str, str, str, int, bool]]) -> InlineKeyboardMarkup:
+def proxy_list_kb(proxies: list[tuple[str, str, str, str, int, int, bool]]) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    for proxy_id, name, ptype, host, port, is_busy in proxies:
-        status = "🔴 [Занят] " if is_busy else "🟢 [Свободен] "
+    for proxy_id, name, ptype, host, port, usage_count, is_busy in proxies:
+        status = "🔴" if is_busy else "🟢"
         builder.button(
-            text=f"{status}{name} ({ptype}://{host}:{port})",
+            text=f"{status} {name} ({ptype}://{host}:{port}) [{usage_count}/6]",
             callback_data=f"proxy_detail:{proxy_id}",
         )
     builder.button(text="➕ Добавить прокси", callback_data="proxy_add")
@@ -133,18 +133,37 @@ def proxy_cancel_kb() -> InlineKeyboardMarkup:
 
 
 def proxy_assign_list_kb(
-    proxies: list[tuple[str, str, str, str, int, bool]],
+    proxies: list[tuple[str, str, str, str, int, int, bool]],
     account_id: int,
 ) -> InlineKeyboardMarkup:
     """List of free proxies to assign to an account."""
     builder = InlineKeyboardBuilder()
-    for proxy_id, name, ptype, host, port, is_busy in proxies:
+    for proxy_id, name, ptype, host, port, usage_count, is_busy in proxies:
         if is_busy:
             continue
         builder.button(
-            text=f"🟢 {name} ({ptype}://{host}:{port})",
+            text=f"🟢 {name} ({ptype}://{host}:{port}) [{usage_count}/6]",
             callback_data=f"proxy_assign:{account_id}:{proxy_id}",
         )
     builder.button(text="← Назад", callback_data=f"account:{account_id}")
     builder.adjust(1)
+    return builder.as_markup()
+
+
+def admins_list_kb(db_admins: list[int]) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for tg_id in db_admins:
+        builder.button(
+            text=f"🗑 {tg_id}",
+            callback_data=f"admin_del:{tg_id}",
+        )
+    builder.button(text="➕ Добавить админа", callback_data="admin_add")
+    builder.button(text="← Меню", callback_data="menu:main")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def admin_cancel_kb() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✖️ Отмена", callback_data="menu:admins")
     return builder.as_markup()

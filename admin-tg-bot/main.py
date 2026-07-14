@@ -3,6 +3,7 @@ import asyncio
 import app
 from config import bot, dp, settings
 from utils import WhatsAppAuth, set_command
+from utils.access import all_admin_ids, load_db_admins
 from utils.database import init_db
 from utils.logger import logger
 
@@ -28,9 +29,11 @@ async def main() -> None:
         raise RuntimeError("BOT_TOKEN is not set in .env")
 
     await _wait_for_telegram()
-    logger.info(f"admins: {settings.admins_list}")
+    logger.info(f"owners: {settings.admins_list}")
 
     await init_db()
+    await load_db_admins()
+    logger.info(f"all admins: {all_admin_ids()}")
 
     wa_auth = WhatsAppAuth()
 

@@ -11,7 +11,7 @@ from aiogram.types import (
 )
 
 from app.keyboards import accounts_list_kb, auth_cancel_kb
-from config import settings
+from utils.access import is_admin
 from utils.database import Account, AccountRepository
 from utils.FSM import AddAccount
 from utils.logger import logger
@@ -26,10 +26,6 @@ _QR_CAPTION = (
     "Настройки → Связанные устройства → Привязка устройства\n"
     "и отсканируйте этот QR-код."
 )
-
-
-def is_admin(tg_id: int) -> bool:
-    return tg_id in settings.admins_list
 
 
 async def _persist_account(phone: str, jid: str | None, admin_tg_id: int) -> None:
