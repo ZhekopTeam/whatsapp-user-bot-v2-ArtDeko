@@ -55,3 +55,44 @@ class ProxyRepository:
                 .values(proxy_id=proxy_id)
             )
             await session.commit()
+
+    async def check_assign_allowed(
+        self, account_id: int, proxy_id: str
+    ) -> str | None:
+        """Validate group/proxy exclusivity. Returns error text or None if OK."""
+        from .group_repo import GroupRepository
+
+        group_repo = GroupRepository()
+        target_group = await group_repo.get_group_id_for_account(account_id)
+
+        # Proxy already used by another group?
+        proxy_groups = await group_repo.get_group_ids_for_proxy(proxy_id)
+        if target_group is not None:
+            other = proxy_groups - {target_group}
+        else:
+            other = proxy_groups
+        if other:
+            return (
+                "Этот прокси уже используется другой группой аккаунтов.\n"
+                "Один прокси нельзя подключать к нескольким группам."
+            )
+
+        # If account is in a group, all members must share the same proxy
+        if target_group is not None:
+            members = await group_repo.get_members(target_group)
+            for m in members:
+                if m.id == account_id:
+                    continue
+                if m.proxy_id is not None and m.proxy_id != proxy_id:
+                    return (
+                        "В группе уже другой прокси.\n"
+                        "Все аккаунты группы должны использовать один прокси."
+                    )
+
+        accounts_on_proxy = await self.get_accounts_for_proxy(proxy_id)
+        if len(accounts_on_proxy) >= 6 and not any(
+            a.id == account_id for a in accounts_on_proxy
+        ):
+            return "Прокси уже заполнен (максимум 6 аккаунтов)."
+
+        return None

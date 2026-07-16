@@ -6,10 +6,12 @@ class AddAccount(StatesGroup):
     waiting_qr = State()
 
 
-class CreateChain(StatesGroup):
+class CreateGroup(StatesGroup):
     choosing_accounts = State()
     choosing_start_time = State()
     waiting_custom_time = State()
+    choosing_days = State()
+    waiting_custom_days = State()
 
 
 class AddProxy(StatesGroup):

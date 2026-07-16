@@ -181,6 +181,82 @@ func (r *JobsRepo) MarkFailed(ctx context.Context, jobID int64, message string) 
 	return nil
 }
 
+func (r *JobsRepo) MarkCancelled(ctx context.Context, jobID int64, reason string) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE message_jobs
+		SET status = ?, last_error = ?, updated_at = ?
+		WHERE id = ? AND status IN (?, ?)
+	`, domain.JobStatusCancelled, reason, time.Now().UTC(), jobID,
+		domain.JobStatusPending, domain.JobStatusSending)
+	if err != nil {
+		return fmt.Errorf("mark job as cancelled: %w", err)
+	}
+	return nil
+}
+
+// CancelOutsideSendWindow cancels pending/sending jobs whose send-day window
+// has already ended. Jobs planned for future calendar days are kept.
+// endHour is local (e.g. 22 means 22:00).
+func (r *JobsRepo) CancelOutsideSendWindow(
+	ctx context.Context,
+	now time.Time,
+	location *time.Location,
+	endHour int,
+) (int64, error) {
+	if location == nil {
+		location = time.UTC
+	}
+	if endHour <= 0 || endHour > 23 {
+		endHour = 22
+	}
+
+	localNow := now.In(location)
+	todayStart := time.Date(
+		localNow.Year(), localNow.Month(), localNow.Day(),
+		0, 0, 0, 0, location,
+	)
+	tomorrowStart := todayStart.AddDate(0, 0, 1)
+	todayWindowEnd := time.Date(
+		localNow.Year(), localNow.Month(), localNow.Day(),
+		endHour, 0, 0, 0, location,
+	)
+
+	var total int64
+
+	// Missed previous days entirely.
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE message_jobs
+		SET status = ?, last_error = ?, updated_at = ?
+		WHERE status IN (?, ?) AND planned_at < ?
+	`, domain.JobStatusCancelled, "cancelled: send window ended", now.UTC(),
+		domain.JobStatusPending, domain.JobStatusSending, todayStart.UTC())
+	if err != nil {
+		return 0, fmt.Errorf("cancel past-day jobs: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		total += n
+	}
+
+	// After today's window: cancel remaining jobs planned for today.
+	if !localNow.Before(todayWindowEnd) {
+		res, err = r.db.ExecContext(ctx, `
+			UPDATE message_jobs
+			SET status = ?, last_error = ?, updated_at = ?
+			WHERE status IN (?, ?) AND planned_at >= ? AND planned_at < ?
+		`, domain.JobStatusCancelled, "cancelled: past daily send window", now.UTC(),
+			domain.JobStatusPending, domain.JobStatusSending,
+			todayStart.UTC(), tomorrowStart.UTC())
+		if err != nil {
+			return total, fmt.Errorf("cancel today leftover jobs: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			total += n
+		}
+	}
+
+	return total, nil
+}
+
 func (r *JobsRepo) ResetSendingJobs(ctx context.Context) error {
 	_, err := r.db.ExecContext(ctx, `
 		UPDATE message_jobs

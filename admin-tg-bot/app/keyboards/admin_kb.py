@@ -7,7 +7,7 @@ from utils.session_repo import mask_phone
 def main_menu_kb(*, show_admins: bool = False) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="📱 Аккаунты WhatsApp", callback_data="menu:accounts")
-    builder.button(text="🔄 Схемы общения", callback_data="menu:communications")
+    builder.button(text="👥 Группы аккаунтов", callback_data="menu:communications")
     builder.button(text="🌐 Прокси", callback_data="menu:proxy")
     if show_admins:
         builder.button(text="👥 Админы", callback_data="menu:admins")
@@ -15,45 +15,92 @@ def main_menu_kb(*, show_admins: bool = False) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def communications_menu_kb() -> InlineKeyboardMarkup:
+def communications_menu_kb(groups: list[tuple[int, int]]) -> InlineKeyboardMarkup:
+    """groups: list of (group_id, member_count)."""
     builder = InlineKeyboardBuilder()
-    builder.button(text="➕ Создать цепочку общения", callback_data="comm:create")
+    for group_id, count in groups:
+        builder.button(
+            text=f"Группа #{group_id} ({count} акк.)",
+            callback_data=f"group:view:{group_id}",
+        )
+    builder.button(text="➕ Создать группу", callback_data="group:create")
     builder.button(text="← Меню", callback_data="menu:main")
     builder.adjust(1)
     return builder.as_markup()
 
 
-def comm_choose_accounts_kb(active_accounts: list[tuple[int, str]], last_selected_id: int | None, can_finish: bool) -> InlineKeyboardMarkup:
+def group_detail_kb(group_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    for acc_id, phone in active_accounts:
-        if acc_id == last_selected_id:
-            continue
+    builder.button(
+        text="▶️ Запустить переписку",
+        callback_data=f"group:start:{group_id}",
+    )
+    builder.button(
+        text="🗑 Удалить группу",
+        callback_data=f"group:del:{group_id}",
+    )
+    builder.button(text="← Назад", callback_data="menu:communications")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def group_choose_accounts_kb(
+    accounts: list[tuple[int, str]],
+    selected_ids: list[int],
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    selected_set = set(selected_ids)
+    for acc_id, phone in accounts:
+        mark = "✅ " if acc_id in selected_set else ""
         builder.button(
-            text=mask_phone(phone),
-            callback_data=f"comm:add_acc:{acc_id}"
+            text=f"{mark}{mask_phone(phone)}",
+            callback_data=f"group:toggle:{acc_id}",
         )
     builder.adjust(1)
 
     controls = InlineKeyboardBuilder()
-    controls.button(text="↩️ Сбросить", callback_data="comm:reset")
-    if can_finish:
-        controls.button(text="✅ Готово", callback_data="comm:finish")
+    controls.button(text="↩️ Сбросить", callback_data="group:reset")
+    if 2 <= len(selected_ids) <= 6:
+        controls.button(text="✅ Готово", callback_data="group:finish")
     controls.button(text="← Отмена", callback_data="menu:communications")
-    controls.adjust(2 if can_finish else 1)
+    controls.adjust(2 if 2 <= len(selected_ids) <= 6 else 1)
 
     builder.attach(controls)
     return builder.as_markup()
 
 
-def comm_time_options_kb() -> InlineKeyboardMarkup:
+def group_time_options_kb(group_id: int | None = None) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text="▶️ Начать сейчас", callback_data="comm:time:now")
-    builder.button(text="⏰ Через 10 минут", callback_data="comm:time:10m")
-    builder.button(text="⏰ Через 1 час", callback_data="comm:time:1h")
-    builder.button(text="📅 Завтра в 09:00", callback_data="comm:time:tomorrow_9")
-    builder.button(text="✏️ Ввести вручную", callback_data="comm:time:custom")
-    builder.button(text="← Назад", callback_data="comm:reset")
+    prefix = f"group:time:{group_id}:" if group_id is not None else "group:time:new:"
+    builder.button(text="▶️ Начать сейчас", callback_data=f"{prefix}now")
+    builder.button(text="⏰ Через 10 минут", callback_data=f"{prefix}10m")
+    builder.button(text="⏰ Через 1 час", callback_data=f"{prefix}1h")
+    builder.button(text="📅 Завтра в 10:00", callback_data=f"{prefix}tomorrow_10")
+    builder.button(text="✏️ Ввести вручную", callback_data=f"{prefix}custom")
+    back = (
+        f"group:view:{group_id}"
+        if group_id is not None
+        else "menu:communications"
+    )
+    builder.button(text="← Назад", callback_data=back)
     builder.adjust(1)
+    return builder.as_markup()
+
+
+def group_days_options_kb(group_id: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for days in (1, 3, 7, 14, 30):
+        label = "1 день" if days == 1 else f"{days} дней"
+        builder.button(
+            text=label,
+            callback_data=f"group:days:{group_id}:{days}",
+        )
+    builder.button(
+        text="✏️ Ввести вручную",
+        callback_data=f"group:days:{group_id}:custom",
+    )
+    builder.button(text="← Назад", callback_data=f"group:start:{group_id}")
+    builder.adjust(2, 2, 1, 1, 1)
     return builder.as_markup()
 
 
@@ -150,11 +197,11 @@ def proxy_assign_list_kb(
     return builder.as_markup()
 
 
-def admins_list_kb(db_admins: list[int]) -> InlineKeyboardMarkup:
+def admins_list_kb(db_admins: list[tuple[int, str]]) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    for tg_id in db_admins:
+    for tg_id, label in db_admins:
         builder.button(
-            text=f"🗑 {tg_id}",
+            text=f"🗑 {label}",
             callback_data=f"admin_del:{tg_id}",
         )
     builder.button(text="➕ Добавить админа", callback_data="admin_add")

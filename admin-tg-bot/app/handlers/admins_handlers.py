@@ -1,6 +1,6 @@
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
 from app.keyboards import admin_cancel_kb, admins_list_kb
 from utils.access import (
@@ -16,16 +16,47 @@ from utils.FSM import AddAdmin
 router_admins = Router(name="admins")
 
 
-def _admins_text() -> str:
-    owners = owner_ids()
-    admins = db_admin_ids()
-    owners_lines = "\n".join(f"• <code>{tid}</code> (владелец)" for tid in owners) or "—"
-    admins_lines = "\n".join(f"• <code>{tid}</code>" for tid in admins) or "—"
-    return (
-        "👥 <b>Админы</b>\n\n"
-        f"<b>Владельцы</b> (из .env, нельзя удалить):\n{owners_lines}\n\n"
-        f"<b>Админы</b> (можно удалить):\n{admins_lines}"
+async def _format_user(bot: Bot, tg_id: int) -> str:
+    try:
+        user = await bot.get_chat(tg_id)
+        if user.username:
+            return f"@{user.username}"
+        if user.first_name:
+            name = user.first_name
+            if user.last_name:
+                name = f"{name} {user.last_name}"
+            return name
+    except Exception:
+        pass
+    return f"<code>{tg_id}</code>"
+
+
+async def _admin_list_text(bot: Bot) -> str:
+    lines = ["👤 <b>Администраторы бота</b>\n"]
+    for tg_id in owner_ids():
+        label = await _format_user(bot, tg_id)
+        lines.append(f"• {label} — владелец")
+    for tg_id in db_admin_ids():
+        label = await _format_user(bot, tg_id)
+        lines.append(f"• {label} — добавлен")
+    if not owner_ids() and not db_admin_ids():
+        lines.append("Список пуст.")
+    lines.append(
+        "\nВладельцы задаются разработчиком и не удаляются через бота."
     )
+    return "\n".join(lines)
+
+
+async def _db_admin_buttons(bot: Bot) -> list[tuple[int, str]]:
+    buttons: list[tuple[int, str]] = []
+    for tg_id in db_admin_ids():
+        buttons.append((tg_id, await _format_user(bot, tg_id)))
+    return buttons
+
+
+async def _admins_screen(bot: Bot) -> tuple[str, InlineKeyboardMarkup]:
+    buttons = await _db_admin_buttons(bot)
+    return await _admin_list_text(bot), admins_list_kb(buttons)
 
 
 @router_admins.callback_query(F.data == "menu:admins")
@@ -34,10 +65,8 @@ async def cb_admins_menu(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer("Недостаточно прав", show_alert=True)
         return
     await state.clear()
-    await callback.message.edit_text(
-        _admins_text(),
-        reply_markup=admins_list_kb(db_admin_ids()),
-    )
+    text, markup = await _admins_screen(callback.bot)
+    await callback.message.edit_text(text, reply_markup=markup)
     await callback.answer()
 
 
@@ -69,26 +98,30 @@ async def msg_admin_tg_id(message: Message, state: FSMContext) -> None:
 
     tg_id = int(raw)
     if is_owner(tg_id):
+        text, markup = await _admins_screen(message.bot)
         await message.answer(
             "⚠️ Этот ID уже является владельцем (из .env).",
-            reply_markup=admins_list_kb(db_admin_ids()),
+            reply_markup=markup,
         )
         await state.clear()
         return
 
     if is_admin(tg_id):
+        text, markup = await _admins_screen(message.bot)
         await message.answer(
             "⚠️ Этот ID уже добавлен как админ.",
-            reply_markup=admins_list_kb(db_admin_ids()),
+            reply_markup=markup,
         )
         await state.clear()
         return
 
     await add_admin(tg_id)
     await state.clear()
+    label = await _format_user(message.bot, tg_id)
+    text, markup = await _admins_screen(message.bot)
     await message.answer(
-        f"✅ Админ <code>{tg_id}</code> добавлен!",
-        reply_markup=admins_list_kb(db_admin_ids()),
+        f"✅ Админ {label} добавлен!",
+        reply_markup=markup,
     )
 
 
@@ -107,8 +140,7 @@ async def cb_admin_del(callback: CallbackQuery) -> None:
         )
         return
 
-    await callback.message.edit_text(
-        _admins_text(),
-        reply_markup=admins_list_kb(db_admin_ids()),
-    )
-    await callback.answer(f"Админ {tg_id} удалён")
+    text, markup = await _admins_screen(callback.bot)
+    await callback.message.edit_text(text, reply_markup=markup)
+    label = await _format_user(callback.bot, tg_id)
+    await callback.answer(f"Админ {label} удалён")

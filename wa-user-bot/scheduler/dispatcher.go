@@ -26,28 +26,60 @@ type Dispatcher struct {
 	accountsRepo *sqlite.AccountsRepo
 	sender       MessageSender
 	batchSize    int
+	location     *time.Location
+	windowEndHour int
 
 	mu        sync.Mutex
 	cooldowns map[string]cooldownState
 }
 
-func NewDispatcher(jobsRepo *sqlite.JobsRepo, accountsRepo *sqlite.AccountsRepo, sender MessageSender, batchSize int) *Dispatcher {
+func NewDispatcher(
+	jobsRepo *sqlite.JobsRepo,
+	accountsRepo *sqlite.AccountsRepo,
+	sender MessageSender,
+	batchSize int,
+	location *time.Location,
+	windowEndHour int,
+) *Dispatcher {
+	if location == nil {
+		location = time.UTC
+	}
+	if windowEndHour <= 0 || windowEndHour > 23 {
+		windowEndHour = 22
+	}
 	return &Dispatcher{
-		jobsRepo:     jobsRepo,
-		accountsRepo: accountsRepo,
-		sender:       sender,
-		batchSize:    batchSize,
-		cooldowns:    make(map[string]cooldownState),
+		jobsRepo:      jobsRepo,
+		accountsRepo:  accountsRepo,
+		sender:        sender,
+		batchSize:     batchSize,
+		location:      location,
+		windowEndHour: windowEndHour,
+		cooldowns:     make(map[string]cooldownState),
 	}
 }
 
 func (d *Dispatcher) DispatchDue(ctx context.Context, now time.Time) error {
+	cancelled, err := d.jobsRepo.CancelOutsideSendWindow(ctx, now, d.location, d.windowEndHour)
+	if err != nil {
+		log.Printf("[dispatcher] cancel outside window: %v", err)
+	} else if cancelled > 0 {
+		log.Printf("[dispatcher] cancelled %d job(s) outside send window", cancelled)
+	}
+
 	jobs, err := d.jobsRepo.ClaimDueJobs(ctx, now, d.batchSize)
 	if err != nil {
 		return fmt.Errorf("claim due jobs: %w", err)
 	}
 
 	for _, job := range jobs {
+		if d.isPastSendWindow(now, job.PlannedAt) {
+			log.Printf("[dispatcher] job %d past send window, cancelling", job.ID)
+			if cancelErr := d.jobsRepo.MarkCancelled(ctx, job.ID, "cancelled: past daily send window"); cancelErr != nil {
+				log.Printf("failed to cancel job %d: %v", job.ID, cancelErr)
+			}
+			continue
+		}
+
 		senderAccount, err := d.accountsRepo.GetByID(ctx, job.SenderAccountID)
 		if err != nil {
 			d.markFailed(ctx, job.ID, fmt.Errorf("load sender account %d: %w", job.SenderAccountID, err))
@@ -145,4 +177,31 @@ func (d *Dispatcher) markFailed(ctx context.Context, jobID int64, err error) {
 	if markErr := d.jobsRepo.MarkFailed(ctx, jobID, err.Error()); markErr != nil {
 		log.Printf("failed to mark job %d as failed: %v", jobID, markErr)
 	}
+}
+
+func (d *Dispatcher) isPastSendWindow(now time.Time, plannedAt time.Time) bool {
+	localNow := now.In(d.location)
+	localPlanned := plannedAt.In(d.location)
+
+	plannedDayEnd := time.Date(
+		localPlanned.Year(), localPlanned.Month(), localPlanned.Day(),
+		d.windowEndHour, 0, 0, 0, d.location,
+	)
+	// Don't send if we're past that day's window end, or job itself is at/after window end.
+	if !localPlanned.Before(plannedDayEnd) {
+		return true
+	}
+	if localNow.Year() == localPlanned.Year() &&
+		localNow.YearDay() == localPlanned.YearDay() &&
+		!localNow.Before(plannedDayEnd) {
+		return true
+	}
+	// Planned for a previous day that already ended.
+	if localPlanned.Before(time.Date(
+		localNow.Year(), localNow.Month(), localNow.Day(),
+		0, 0, 0, 0, d.location,
+	)) {
+		return true
+	}
+	return false
 }

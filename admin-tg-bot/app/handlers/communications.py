@@ -1,8 +1,8 @@
-import asyncio
 from datetime import datetime, timedelta, timezone
 import json
 import os
 import random
+
 import aiosqlite
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
@@ -11,24 +11,123 @@ from zoneinfo import ZoneInfo
 
 from app.keyboards import (
     communications_menu_kb,
-    comm_choose_accounts_kb,
-    comm_time_options_kb,
+    group_choose_accounts_kb,
+    group_days_options_kb,
+    group_detail_kb,
+    group_time_options_kb,
     main_menu_kb,
 )
 from config import settings
 from utils.access import is_admin, is_owner
-from utils.database import AccountRepository
+from utils.database import (
+    MAX_GROUP_SIZE,
+    AccountRepository,
+    GroupRepository,
+)
+from utils.FSM import CreateGroup
 from utils.logger import logger
 from utils.session_repo import mask_phone
-from utils import CreateChain
-
 
 router_comm = Router(name="comm")
+
+REPLY_DELAY_MIN = 5
+REPLY_DELAY_MAX = 15
+CYCLES_PER_PAIR = 3  # each cycle = A→B then B→A → 6 messages per pair
+WINDOW_START_HOUR = 10
+WINDOW_END_HOUR = 22
 
 
 def get_bot_timezone() -> ZoneInfo:
     tz_name = os.getenv("BOT_TIMEZONE", "Europe/Moscow")
     return ZoneInfo(tz_name)
+
+
+def pair_count(n_accounts: int) -> int:
+    if n_accounts < 2:
+        return 0
+    if n_accounts == 2:
+        return 1
+    return n_accounts
+
+
+def messages_per_day(n_accounts: int) -> int:
+    return pair_count(n_accounts) * CYCLES_PER_PAIR * 2
+
+
+def max_dialogue_duration(n_accounts: int) -> timedelta:
+    """Worst-case duration (all gaps = REPLY_DELAY_MAX)."""
+    gaps = max(messages_per_day(n_accounts) - 1, 0)
+    return timedelta(minutes=gaps * REPLY_DELAY_MAX)
+
+
+def window_bounds_for_day(day_local: datetime) -> tuple[datetime, datetime]:
+    """Return (window_start, window_end) in the same tz as day_local."""
+    start = day_local.replace(
+        hour=WINDOW_START_HOUR, minute=0, second=0, microsecond=0
+    )
+    end = day_local.replace(
+        hour=WINDOW_END_HOUR, minute=0, second=0, microsecond=0
+    )
+    return start, end
+
+
+def latest_allowed_start(day_local: datetime, n_accounts: int) -> datetime:
+    _, window_end = window_bounds_for_day(day_local)
+    return window_end - max_dialogue_duration(n_accounts)
+
+
+def validate_start_time(
+    start_utc: datetime,
+    n_accounts: int,
+) -> str | None:
+    """Return Russian error text if start is outside the send window."""
+    local_tz = get_bot_timezone()
+    start_local = start_utc.astimezone(local_tz)
+    window_start, window_end = window_bounds_for_day(start_local)
+    latest = latest_allowed_start(start_local, n_accounts)
+
+    if start_local < window_start:
+        return (
+            f"Слишком рано.\n"
+            f"Окно отправки: <b>{WINDOW_START_HOUR}:00–{WINDOW_END_HOUR}:00</b>.\n"
+            f"Самый ранний старт: <b>{window_start.strftime('%d.%m.%Y %H:%M')}</b>"
+        )
+    if start_local > latest:
+        return (
+            f"Слишком поздний старт — переписка не успеет до {WINDOW_END_HOUR}:00.\n"
+            f"Для {n_accounts} акк. нужно до <b>{latest.strftime('%H:%M')}</b> "
+            f"(запас на паузы 5–{REPLY_DELAY_MAX} мин).\n"
+            f"Окно: <b>{WINDOW_START_HOUR}:00–{WINDOW_END_HOUR}:00</b>."
+        )
+    if start_local >= window_end:
+        return (
+            f"Окно отправки уже закрыто ({WINDOW_START_HOUR}:00–{WINDOW_END_HOUR}:00)."
+        )
+    return None
+
+
+def filter_jobs_within_window(jobs: list[dict], day_local: datetime) -> list[dict]:
+    """Drop jobs planned at/after window end (safety net, no reschedule)."""
+    _, window_end = window_bounds_for_day(day_local)
+    window_end_utc = window_end.astimezone(timezone.utc)
+    kept: list[dict] = []
+    dropped = 0
+    for job in jobs:
+        if job["planned_at"] >= window_end_utc:
+            dropped += 1
+            continue
+        kept.append(job)
+    if dropped:
+        logger.warning(
+            "Dropped %s job(s) past %s:00 window for %s",
+            dropped,
+            WINDOW_END_HOUR,
+            day_local.date(),
+        )
+    # re-number steps after filtering
+    for i, job in enumerate(kept, start=1):
+        job["step_no"] = i
+    return kept
 
 
 def get_sentences_path() -> str:
@@ -61,260 +160,716 @@ def generate_message_from_catalog(sentences_path: str) -> str:
         return "Привет! Как твои дела?"
 
 
-async def insert_jobs_to_db(comm_id: int, run_date: str, jobs: list[dict], db_path: str = settings.RUNTIME_DB_PATH) -> None:
+def build_dialogue_pairs(account_ids: list[int]) -> list[tuple[int, int]]:
+    """Ordered neighbour pairs, closing the circle for 3+ accounts.
+
+    Example for [1,2,3,4,5,6]: (1,2), (2,3), (3,4), (4,5), (5,6), (6,1).
+    For 2 accounts: only (1,2).
+    """
+    n = len(account_ids)
+    if n < 2:
+        return []
+    if n == 2:
+        return [(account_ids[0], account_ids[1])]
+    pairs: list[tuple[int, int]] = []
+    for i in range(n):
+        pairs.append((account_ids[i], account_ids[(i + 1) % n]))
+    return pairs
+
+
+def build_group_jobs(
+    account_ids: list[int],
+    start_time: datetime,
+    sentences_path: str,
+) -> list[dict]:
+    """For each pair: 3× (A→B, B→A) with 5–15 min gaps → 6 messages per pair."""
+    pairs = build_dialogue_pairs(account_ids)
+    jobs: list[dict] = []
+    current_time = start_time
+    step = 0
+
+    for pair_idx, (acc_a, acc_b) in enumerate(pairs):
+        for _cycle in range(CYCLES_PER_PAIR):
+            for sender, receiver in ((acc_a, acc_b), (acc_b, acc_a)):
+                if step > 0:
+                    current_time += timedelta(
+                        minutes=random.randint(REPLY_DELAY_MIN, REPLY_DELAY_MAX)
+                    )
+                step += 1
+                jobs.append({
+                    "step_no": step,
+                    "sender_account_id": sender,
+                    "receiver_account_id": receiver,
+                    "planned_at": current_time,
+                    "status": "pending",
+                    "message_text": generate_message_from_catalog(sentences_path),
+                    "pair_idx": pair_idx,
+                })
+    return jobs
+
+
+async def insert_jobs_to_db(
+    comm_id: int,
+    run_date: str,
+    jobs: list[dict],
+    db_path: str = settings.RUNTIME_DB_PATH,
+) -> None:
     async with aiosqlite.connect(db_path) as db:
         await db.execute(
             """
-            INSERT OR IGNORE INTO communication_runs (comm_id, run_date, status, created_at, updated_at)
+            INSERT OR IGNORE INTO communication_runs
+                (comm_id, run_date, status, created_at, updated_at)
             VALUES (?, ?, ?, datetime('now'), datetime('now'))
             """,
-            (comm_id, run_date, "planned")
+            (comm_id, run_date, "planned"),
         )
         for job in jobs:
             await db.execute(
                 """
                 INSERT OR IGNORE INTO message_jobs (
                     comm_id, run_date, step_no, sender_account_id, receiver_account_id,
-                    planned_at, status, message_text, attempt_count, last_error, created_at, updated_at
+                    planned_at, status, message_text, attempt_count, last_error,
+                    created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, '', datetime('now'), datetime('now'))
                 """,
                 (
-                    job["comm_id"],
-                    job["run_date"],
+                    comm_id,
+                    run_date,
                     job["step_no"],
                     job["sender_account_id"],
                     job["receiver_account_id"],
                     job["planned_at"].strftime("%Y-%m-%d %H:%M:%S"),
                     job["status"],
-                    job["message_text"]
-                )
+                    job["message_text"],
+                ),
             )
         await db.commit()
 
 
+async def validate_group_proxies(
+    account_ids: list[int],
+    *,
+    exclude_group_id: int | None = None,
+) -> str | None:
+    """Return error text if accounts cannot share one group due to proxies.
+
+    Rules:
+    - All selected accounts must use the same proxy (or all have none).
+    - That proxy must not already be used by accounts from another group.
+    """
+    repo = AccountRepository()
+    group_repo = GroupRepository()
+    proxy_ids: set[str | None] = set()
+    for acc_id in account_ids:
+        acc = await repo.get_by_id(acc_id)
+        if acc is None:
+            return f"Аккаунт id={acc_id} не найден."
+        proxy_ids.add(acc.proxy_id)
+
+    non_null = {p for p in proxy_ids if p is not None}
+    if len(non_null) > 1:
+        return (
+            "У выбранных аккаунтов разные прокси.\n"
+            "В одной группе все аккаунты должны использовать один прокси."
+        )
+
+    if non_null:
+        proxy_id = next(iter(non_null))
+        foreign_groups = await group_repo.get_group_ids_for_proxy(proxy_id)
+        if exclude_group_id is not None:
+            foreign_groups.discard(exclude_group_id)
+        if foreign_groups:
+            return (
+                "Этот прокси уже используется аккаунтами другой группы.\n"
+                "Один прокси нельзя подключать к нескольким группам."
+            )
+    return None
+
+
+async def _groups_menu_payload() -> tuple[str, object]:
+    group_repo = GroupRepository()
+    groups = await group_repo.get_all()
+    rows: list[tuple[int, int]] = []
+    for g in groups:
+        members = await group_repo.get_members(g.id)
+        rows.append((g.id, len(members)))
+    text = (
+        "👥 <b>Группы аккаунтов</b>\n\n"
+        "Выберите аккаунты для группы (от 2 до 6) — "
+        "бот сам построит переписку по фиксированному сценарию.\n\n"
+        f"⏱ Окно отправки: <b>{WINDOW_START_HOUR}:00–{WINDOW_END_HOUR}:00</b>\n"
+        f"Сообщения после {WINDOW_END_HOUR}:00 не отправляются и отменяются.\n"
+        f"Со 2-го дня старт в <b>{WINDOW_START_HOUR}:00</b>.\n\n"
+        "В одной группе все аккаунты должны быть на одном прокси; "
+        "один прокси нельзя использовать в нескольких группах."
+    )
+    if not rows:
+        text += "\n\nГрупп пока нет."
+    return text, communications_menu_kb(rows)
+
+
+# ── Menu / list ───────────────────────────────────────────────────────────────
+
+
 @router_comm.callback_query(F.data == "menu:communications")
-async def cb_communications_menu(callback: CallbackQuery, state: FSMContext) -> None:
+async def cb_groups_menu(callback: CallbackQuery, state: FSMContext) -> None:
     if not is_admin(callback.from_user.id):
         await callback.answer()
         return
     await state.clear()
-    await callback.message.edit_text(
-        "🔄 <b>Схемы общения</b>\n\n"
-        "Здесь вы можете настроить цепочку общения между вашими аккаунтами WhatsApp.",
-        reply_markup=communications_menu_kb(),
-    )
+    text, markup = await _groups_menu_payload()
+    await callback.message.edit_text(text, reply_markup=markup)
     await callback.answer()
 
 
-@router_comm.callback_query(F.data == "comm:create")
-async def cb_create_chain(callback: CallbackQuery, state: FSMContext) -> None:
+@router_comm.callback_query(F.data.startswith("group:view:"))
+async def cb_group_view(callback: CallbackQuery) -> None:
     if not is_admin(callback.from_user.id):
         await callback.answer()
         return
-    active_accounts = await AccountRepository().get_active()
-    if len(active_accounts) < 2:
-        await callback.answer("⚠️ Для создания схемы общения нужно как минимум 2 активных аккаунта!", show_alert=True)
+    group_id = int(callback.data.split(":")[-1])
+    group_repo = GroupRepository()
+    group = await group_repo.get_by_id(group_id)
+    if not group:
+        await callback.answer("Группа не найдена", show_alert=True)
         return
-
-    await state.set_state(CreateChain.choosing_accounts)
-    await state.update_data(
-        selected_ids=[],
-        active_accounts=[(a.id, a.phone) for a in active_accounts]
+    members = await group_repo.get_members(group_id)
+    lines = [f"👥 <b>Группа #{group_id}</b>\n"]
+    for i, acc in enumerate(members, start=1):
+        proxy = f" · прокси" if acc.proxy_id else ""
+        lines.append(f"{i}. <b>{mask_phone(acc.phone)}</b>{proxy}")
+    lines.append(
+        "\nПереписка идёт парами по кругу:\n"
+        "1↔2, 2↔3, …, последний↔первый.\n"
+        "В каждой паре — 6 сообщений (3 цикла туда-обратно, пауза 5–15 мин).\n"
+        f"Окно отправки: {WINDOW_START_HOUR}:00–{WINDOW_END_HOUR}:00 "
+        f"(после {WINDOW_END_HOUR}:00 — отмена, без переноса)."
     )
-
-    await _render_choose_accounts_message(callback.message, [], [(a.id, a.phone) for a in active_accounts])
+    await callback.message.edit_text(
+        "\n".join(lines),
+        reply_markup=group_detail_kb(group_id),
+    )
     await callback.answer()
 
 
-async def _render_choose_accounts_message(message: Message, selected_ids: list[int], active_accounts: list[tuple[int, str]]) -> None:
-    if not selected_ids:
-        chain_text = "Цепочка пока пуста.\n\n"
-    else:
-        chain_parts = []
-        for i, acc_id in enumerate(selected_ids):
-            phone = next((p for aid, p in active_accounts if aid == acc_id), "???")
-            chain_parts.append(f"{i+1}. <b>{mask_phone(phone)}</b>")
-        chain_text = "<b>Текущая цепочка:</b>\n" + "\n".join(chain_parts) + "\n\n"
-
-    last_selected_id = selected_ids[-1] if selected_ids else None
-    can_finish = len(selected_ids) >= 2
-
-    await message.edit_text(
-        f"{chain_text}Выберите следующий аккаунт для добавления в цепочку:",
-        reply_markup=comm_choose_accounts_kb(active_accounts, last_selected_id, can_finish)
-    )
+@router_comm.callback_query(F.data.startswith("group:del:"))
+async def cb_group_del(callback: CallbackQuery) -> None:
+    if not is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    group_id = int(callback.data.split(":")[-1])
+    await GroupRepository().delete(group_id)
+    text, markup = await _groups_menu_payload()
+    await callback.message.edit_text(text, reply_markup=markup)
+    await callback.answer("Группа удалена")
 
 
-@router_comm.callback_query(F.data.startswith("comm:add_acc:"))
-async def cb_add_acc(callback: CallbackQuery, state: FSMContext) -> None:
-    acc_id = int(callback.data.split(":")[-1])
-    data = await state.get_data()
-    selected_ids = data.get("selected_ids", [])
-    active_accounts = data.get("active_accounts", [])
-
-    selected_ids.append(acc_id)
-    await state.update_data(selected_ids=selected_ids)
-
-    await _render_choose_accounts_message(callback.message, selected_ids, active_accounts)
-    await callback.answer()
+# ── Create group: select accounts ─────────────────────────────────────────────
 
 
-@router_comm.callback_query(F.data == "comm:reset")
-async def cb_reset_chain(callback: CallbackQuery, state: FSMContext) -> None:
-    data = await state.get_data()
-    active_accounts = data.get("active_accounts", [])
-
-    await state.update_data(selected_ids=[])
-    await _render_choose_accounts_message(callback.message, [], active_accounts)
-    await callback.answer("Цепочка сброшена")
-
-
-@router_comm.callback_query(F.data == "comm:finish")
-async def cb_finish_accounts(callback: CallbackQuery, state: FSMContext) -> None:
-    data = await state.get_data()
-    selected_ids = data.get("selected_ids", [])
-    active_accounts = data.get("active_accounts", [])
-
-    if len(selected_ids) < 2:
-        await callback.answer("⚠️ Выберите хотя бы 2 аккаунта!", show_alert=True)
+@router_comm.callback_query(F.data == "group:create")
+async def cb_group_create(callback: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(callback.from_user.id):
+        await callback.answer()
         return
 
-    await state.set_state(CreateChain.choosing_start_time)
+    group_repo = GroupRepository()
+    taken = await group_repo.list_account_ids_in_groups()
+    active = await AccountRepository().get_active()
+    available = [(a.id, a.phone) for a in active if a.id not in taken]
 
-    chain_parts = []
-    for i, acc_id in enumerate(selected_ids):
-        phone = next((p for aid, p in active_accounts if aid == acc_id), "???")
-        chain_parts.append(f"{i+1}. <b>{mask_phone(phone)}</b>")
-    summary = "<b>Создаваемая цепочка:</b>\n" + "\n".join(chain_parts)
+    if len(available) < 2:
+        await callback.answer(
+            "⚠️ Нужно минимум 2 свободных активных аккаунта "
+            "(не состоящих в других группах).",
+            show_alert=True,
+        )
+        return
+
+    await state.set_state(CreateGroup.choosing_accounts)
+    await state.update_data(selected_ids=[], available=available)
 
     await callback.message.edit_text(
-        f"{summary}\n\nВыберите время начала отправки сообщений:",
-        reply_markup=comm_time_options_kb()
+        _choose_accounts_text([]),
+        reply_markup=group_choose_accounts_kb(available, []),
     )
     await callback.answer()
 
 
-@router_comm.callback_query(F.data.startswith("comm:time:"))
-async def cb_time_option(callback: CallbackQuery, state: FSMContext) -> None:
-    option = callback.data.split(":")[-1]
-    local_tz = get_bot_timezone()
+def _choose_accounts_text(selected_ids: list[int]) -> str:
+    n = len(selected_ids)
+    order = (
+        f"Порядок: {' → '.join(str(i) for i in range(1, n + 1))}\n"
+        if selected_ids
+        else ""
+    )
+    return (
+        f"👥 <b>Новая группа</b> ({n}/{MAX_GROUP_SIZE})\n\n"
+        f"{order}"
+        "Отметьте аккаунты в нужном порядке (от 2 до 6).\n"
+        "Порядок важен: переписка идёт 1↔2, 2↔3, … по кругу."
+    )
 
+
+@router_comm.callback_query(F.data.startswith("group:toggle:"))
+async def cb_group_toggle(callback: CallbackQuery, state: FSMContext) -> None:
+    acc_id = int(callback.data.split(":")[-1])
+    data = await state.get_data()
+    selected: list[int] = list(data.get("selected_ids", []))
+    available = data.get("available", [])
+
+    if acc_id in selected:
+        selected.remove(acc_id)
+    else:
+        if len(selected) >= MAX_GROUP_SIZE:
+            await callback.answer(
+                f"В группе максимум {MAX_GROUP_SIZE} аккаунтов",
+                show_alert=True,
+            )
+            return
+        selected.append(acc_id)
+
+    await state.update_data(selected_ids=selected)
+    await callback.message.edit_text(
+        _choose_accounts_text(selected),
+        reply_markup=group_choose_accounts_kb(available, selected),
+    )
+    await callback.answer()
+
+
+@router_comm.callback_query(F.data == "group:reset")
+async def cb_group_reset(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    available = data.get("available", [])
+    await state.update_data(selected_ids=[])
+    await callback.message.edit_text(
+        _choose_accounts_text([]),
+        reply_markup=group_choose_accounts_kb(available, []),
+    )
+    await callback.answer("Выбор сброшен")
+
+
+@router_comm.callback_query(F.data == "group:finish")
+async def cb_group_finish(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    selected_ids: list[int] = data.get("selected_ids", [])
+
+    if not 2 <= len(selected_ids) <= MAX_GROUP_SIZE:
+        await callback.answer(
+            f"Выберите от 2 до {MAX_GROUP_SIZE} аккаунтов",
+            show_alert=True,
+        )
+        return
+
+    err = await validate_group_proxies(selected_ids)
+    if err:
+        await callback.answer(err, show_alert=True)
+        return
+
+    try:
+        group = await GroupRepository().create(selected_ids)
+    except Exception as e:
+        logger.exception("Failed to create account group")
+        await callback.answer(f"Ошибка создания группы: {e}", show_alert=True)
+        return
+
+    await state.clear()
+    await state.set_state(CreateGroup.choosing_start_time)
+    await state.update_data(group_id=group.id)
+
+    members = await GroupRepository().get_members(group.id)
+    summary = "\n".join(
+        f"{i}. <b>{mask_phone(a.phone)}</b>"
+        for i, a in enumerate(members, start=1)
+    )
+    await callback.message.edit_text(
+        f"✅ Группа #{group.id} создана.\n\n{summary}\n\n"
+        "Выберите время запуска переписки:",
+        reply_markup=group_time_options_kb(group.id),
+    )
+    await callback.answer()
+
+
+# ── Start dialogue for existing group ─────────────────────────────────────────
+
+
+@router_comm.callback_query(F.data.startswith("group:start:"))
+async def cb_group_start(callback: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    group_id = int(callback.data.split(":")[-1])
+    group = await GroupRepository().get_by_id(group_id)
+    if not group:
+        await callback.answer("Группа не найдена", show_alert=True)
+        return
+
+    members = await GroupRepository().get_members(group_id)
+    err = await validate_group_proxies(
+        [m.id for m in members],
+        exclude_group_id=group_id,
+    )
+    if err:
+        await callback.answer(err, show_alert=True)
+        return
+
+    await state.set_state(CreateGroup.choosing_start_time)
+    await state.update_data(group_id=group_id)
+    await callback.message.edit_text(
+        f"👥 Группа #{group_id}\n\nВыберите время запуска переписки:",
+        reply_markup=group_time_options_kb(group_id),
+    )
+    await callback.answer()
+
+
+# ── Time selection ────────────────────────────────────────────────────────────
+
+
+def _parse_time_option(option: str) -> datetime | str | None:
+    """Return UTC start time, 'custom', or None if unknown."""
+    local_tz = get_bot_timezone()
     if option == "now":
-        start_time = datetime.now(timezone.utc)
-    elif option == "10m":
-        start_time = datetime.now(timezone.utc) + timedelta(minutes=10)
-    elif option == "1h":
-        start_time = datetime.now(timezone.utc) + timedelta(hours=1)
-    elif option == "tomorrow_9":
+        return datetime.now(timezone.utc)
+    if option == "10m":
+        return datetime.now(timezone.utc) + timedelta(minutes=10)
+    if option == "1h":
+        return datetime.now(timezone.utc) + timedelta(hours=1)
+    if option == "tomorrow_10":
         local_now = datetime.now(local_tz)
         tomorrow = local_now + timedelta(days=1)
-        local_start = datetime(tomorrow.year, tomorrow.month, tomorrow.day, 9, 0, 0, tzinfo=local_tz)
-        start_time = local_start.astimezone(timezone.utc)
-    elif option == "custom":
-        await state.set_state(CreateChain.waiting_custom_time)
+        local_start = datetime(
+            tomorrow.year, tomorrow.month, tomorrow.day,
+            WINDOW_START_HOUR, 0, 0, tzinfo=local_tz,
+        )
+        return local_start.astimezone(timezone.utc)
+    if option == "custom":
+        return "custom"
+    return None
+
+
+@router_comm.callback_query(F.data.startswith("group:time:"))
+async def cb_group_time(callback: CallbackQuery, state: FSMContext) -> None:
+    # group:time:<group_id|new>:<option>
+    parts = callback.data.split(":")
+    if len(parts) < 4:
+        await callback.answer("Неизвестная опция")
+        return
+    group_ref = parts[2]
+    option = parts[3]
+
+    data = await state.get_data()
+    group_id = data.get("group_id")
+    if group_id is None and group_ref != "new":
+        try:
+            group_id = int(group_ref)
+        except ValueError:
+            group_id = None
+    if group_id is None:
+        await callback.answer("Группа не выбрана", show_alert=True)
+        return
+
+    parsed = _parse_time_option(option)
+    if parsed == "custom":
+        await state.set_state(CreateGroup.waiting_custom_time)
+        await state.update_data(group_id=group_id)
         await callback.message.edit_text(
-            "Введите дату и время запуска цепочки в формате:\n"
+            "Введите дату и время запуска в формате:\n"
             "<code>ДД.ММ.ГГГГ ЧЧ:ММ</code>\n\n"
             "Пример: <code>15.06.2026 12:00</code>",
-            reply_markup=None
+            reply_markup=None,
         )
         await callback.answer()
         return
-    else:
+    if parsed is None:
         await callback.answer("Неизвестная опция")
         return
 
-    await callback.message.delete()
-    await _create_and_save_chain(callback.message, state, start_time)
+    members = await GroupRepository().get_members(group_id)
+    err = validate_start_time(parsed, len(members))
+    if err:
+        await callback.answer(err.replace("<b>", "").replace("</b>", ""), show_alert=True)
+        return
+
+    await _ask_days(callback.message, state, group_id, parsed, edit=True)
     await callback.answer()
 
 
-@router_comm.message(CreateChain.waiting_custom_time)
+@router_comm.message(CreateGroup.waiting_custom_time)
 async def handle_custom_time(message: Message, state: FSMContext) -> None:
-    text = message.text.strip()
+    text = (message.text or "").strip()
     try:
         local_tz = get_bot_timezone()
         parsed = datetime.strptime(text, "%d.%m.%Y %H:%M")
         local_start = parsed.replace(tzinfo=local_tz)
-
-        now_local = datetime.now(local_tz)
-        if local_start < now_local:
-            await message.answer("⚠️ Время не может быть в прошлом! Попробуйте еще раз:")
+        if local_start < datetime.now(local_tz):
+            await message.answer(
+                "⚠️ Время не может быть в прошлом! Попробуйте ещё раз:"
+            )
             return
-
         start_time = local_start.astimezone(timezone.utc)
-        await _create_and_save_chain(message, state, start_time)
+        data = await state.get_data()
+        group_id = data.get("group_id")
+        if group_id is None:
+            await message.answer("⚠️ Группа не выбрана.")
+            await state.clear()
+            return
+        members = await GroupRepository().get_members(group_id)
+        err = validate_start_time(start_time, len(members))
+        if err:
+            await message.answer(f"⚠️ {err}")
+            return
+        await _ask_days(message, state, group_id, start_time, edit=False)
     except ValueError:
-        await message.answer("⚠️ Неверный формат даты и времени. Попробуйте еще раз (Пример: 15.06.2026 12:00):")
+        await message.answer(
+            "⚠️ Неверный формат. Пример: <code>15.06.2026 12:00</code>"
+        )
 
 
-async def _create_and_save_chain(message: Message, state: FSMContext, start_time: datetime) -> None:
+async def _ask_days(
+    message: Message,
+    state: FSMContext,
+    group_id: int,
+    start_time: datetime,
+    *,
+    edit: bool,
+) -> None:
+    await state.set_state(CreateGroup.choosing_days)
+    await state.update_data(
+        group_id=group_id,
+        start_time_iso=start_time.isoformat(),
+    )
+    local_str = start_time.astimezone(get_bot_timezone()).strftime("%d.%m.%Y %H:%M")
+    text = (
+        f"👥 Группа #{group_id}\n"
+        f"Старт: <b>{local_str}</b>\n"
+        f"Окно: <b>{WINDOW_START_HOUR}:00–{WINDOW_END_HOUR}:00</b>\n\n"
+        "На сколько дней запланировать переписку?\n"
+        f"1-й день — в выбранное время, со 2-го — в "
+        f"<b>{WINDOW_START_HOUR}:00</b>.\n"
+        f"Сообщения после {WINDOW_END_HOUR}:00 отменяются (не переносятся)."
+    )
+    markup = group_days_options_kb(group_id)
+    if edit:
+        await message.edit_text(text, reply_markup=markup)
+    else:
+        await message.answer(text, reply_markup=markup)
+
+
+@router_comm.callback_query(F.data.startswith("group:days:"))
+async def cb_group_days(callback: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+
+    # group:days:<group_id>:<N|custom>
+    parts = callback.data.split(":")
+    if len(parts) < 4:
+        await callback.answer("Неизвестная опция")
+        return
+
+    group_id = int(parts[2])
+    option = parts[3]
     data = await state.get_data()
-    selected_ids = data.get("selected_ids", [])
-    active_accounts = data.get("active_accounts", [])
+    start_iso = data.get("start_time_iso")
+    if not start_iso:
+        await callback.answer("Сначала выберите время старта", show_alert=True)
+        return
 
-    if len(selected_ids) < 2:
-        await message.answer("⚠️ Произошла ошибка: цепочка пуста.")
+    start_time = datetime.fromisoformat(start_iso)
+    if start_time.tzinfo is None:
+        start_time = start_time.replace(tzinfo=timezone.utc)
+
+    if option == "custom":
+        await state.set_state(CreateGroup.waiting_custom_days)
+        await state.update_data(group_id=group_id, start_time_iso=start_iso)
+        await callback.message.edit_text(
+            "Введите количество дней числом (от 1 до 90):\n"
+            "Пример: <code>14</code>",
+            reply_markup=None,
+        )
+        await callback.answer()
+        return
+
+    try:
+        days = int(option)
+    except ValueError:
+        await callback.answer("Неизвестная опция")
+        return
+
+    if not 1 <= days <= 90:
+        await callback.answer("Допустимо от 1 до 90 дней", show_alert=True)
+        return
+
+    await callback.message.delete()
+    await _create_and_save_dialogue(
+        callback.message, state, group_id, start_time, days
+    )
+    await callback.answer()
+
+
+@router_comm.message(CreateGroup.waiting_custom_days)
+async def handle_custom_days(message: Message, state: FSMContext) -> None:
+    raw = (message.text or "").strip()
+    if not raw.isdigit():
+        await message.answer("⚠️ Введите целое число дней, например: <code>14</code>")
+        return
+
+    days = int(raw)
+    if not 1 <= days <= 90:
+        await message.answer("⚠️ Допустимо от 1 до 90 дней. Попробуйте ещё раз:")
+        return
+
+    data = await state.get_data()
+    group_id = data.get("group_id")
+    start_iso = data.get("start_time_iso")
+    if group_id is None or not start_iso:
+        await message.answer("⚠️ Не хватает данных. Начните заново.")
         await state.clear()
         return
 
-    pairs = []
-    for i in range(len(selected_ids) - 1):
-        pairs.append((selected_ids[i], selected_ids[i+1]))
-        pairs.append((selected_ids[i+1], selected_ids[i]))
-    if len(selected_ids) > 2:
-        pairs.append((selected_ids[-1], selected_ids[0]))
+    start_time = datetime.fromisoformat(start_iso)
+    if start_time.tzinfo is None:
+        start_time = start_time.replace(tzinfo=timezone.utc)
+
+    await _create_and_save_dialogue(message, state, group_id, start_time, days)
+
+
+async def _create_and_save_dialogue(
+    message: Message,
+    state: FSMContext,
+    group_id: int,
+    start_time: datetime,
+    days: int,
+) -> None:
+    members = await GroupRepository().get_members(group_id)
+    if len(members) < 2:
+        await message.answer("⚠️ В группе меньше 2 аккаунтов.")
+        await state.clear()
+        return
+
+    account_ids = [m.id for m in members]
+    err = await validate_group_proxies(
+        account_ids,
+        exclude_group_id=group_id,
+    )
+    if err:
+        await message.answer(f"⚠️ {err}")
+        await state.clear()
+        return
+
+    phone_by_id = {m.id: m.phone for m in members}
+    sentences_path = get_sentences_path()
+    local_tz = get_bot_timezone()
+    local_start = start_time.astimezone(local_tz)
+
+    start_err = validate_start_time(start_time, len(members))
+    if start_err:
+        await message.answer(f"⚠️ {start_err}")
+        await state.clear()
+        return
+
+    # Day 2+ always starts at window open (10:00)
+    day2_local = (local_start + timedelta(days=1)).replace(
+        hour=WINDOW_START_HOUR, minute=0, second=0, microsecond=0
+    )
+    if days > 1:
+        day2_err = validate_start_time(
+            day2_local.astimezone(timezone.utc), len(members)
+        )
+        if day2_err:
+            await message.answer(
+                f"⚠️ Со 2-го дня старт в {WINDOW_START_HOUR}:00 невозможен:\n{day2_err}"
+            )
+            await state.clear()
+            return
 
     comm_id = int(datetime.now(timezone.utc).timestamp())
-    run_date = start_time.astimezone(get_bot_timezone()).strftime("%Y-%m-%d")
-
-    jobs = []
-    current_time = start_time
-    sentences_path = get_sentences_path()
-
-    for step, (sender_id, receiver_id) in enumerate(pairs, start=1):
-        if step > 1:
-            offset = random.randint(40, 60)
-            current_time += timedelta(minutes=offset)
-
-        jobs.append({
-            "comm_id": comm_id,
-            "run_date": run_date,
-            "step_no": step,
-            "sender_account_id": sender_id,
-            "receiver_account_id": receiver_id,
-            "planned_at": current_time,
-            "status": "pending",
-            "message_text": generate_message_from_catalog(sentences_path)
-        })
+    all_jobs: list[dict] = []
+    dropped_total = 0
 
     try:
-        await insert_jobs_to_db(comm_id, run_date, jobs)
+        for day_offset in range(days):
+            if day_offset == 0:
+                day_start = start_time
+                day_local = local_start
+            else:
+                day_local = local_start.replace(
+                    hour=WINDOW_START_HOUR, minute=0, second=0, microsecond=0
+                ) + timedelta(days=day_offset)
+                day_start = day_local.astimezone(timezone.utc)
 
-        report_lines = [
-            f"✅ <b>Цепочка общения успешно создана!</b>",
-            f"Task ID: <code>{comm_id}</code>",
-            f"Всего сообщений: <b>{len(jobs)}</b>",
-            f"Начало отправки: <b>{start_time.astimezone(get_bot_timezone()).strftime('%d.%m.%Y %H:%M')}</b>",
-            "\n<b>Шаги цепочки:</b>"
-        ]
+            run_date = day_local.strftime("%Y-%m-%d")
+            day_jobs = build_group_jobs(account_ids, day_start, sentences_path)
+            before = len(day_jobs)
+            day_jobs = filter_jobs_within_window(day_jobs, day_local)
+            dropped_total += before - len(day_jobs)
+            if not day_jobs:
+                logger.warning(
+                    "No jobs left within window for group %s day %s",
+                    group_id,
+                    run_date,
+                )
+                continue
+            for job in day_jobs:
+                job["comm_id"] = comm_id
+                job["run_date"] = run_date
+            await insert_jobs_to_db(comm_id, run_date, day_jobs)
+            all_jobs.extend(day_jobs)
 
-        for job in jobs:
-            sender_phone = next((p for aid, p in active_accounts if aid == job["sender_account_id"]), "???")
-            receiver_phone = next((p for aid, p in active_accounts if aid == job["receiver_account_id"]), "???")
-            time_str = job["planned_at"].astimezone(get_bot_timezone()).strftime("%H:%M")
-            report_lines.append(
-                f"• {time_str}: <b>{mask_phone(sender_phone)}</b> ➡️ <b>{mask_phone(receiver_phone)}</b>"
+        if not all_jobs:
+            await message.answer(
+                "⚠️ Не удалось создать сообщения в окне отправки. "
+                "Выберите более раннее время старта."
             )
+            await state.clear()
+            return
+
+        pairs = build_dialogue_pairs(account_ids)
+        days_created = len({j["run_date"] for j in all_jobs})
+        report = [
+            f"✅ <b>Переписка для группы #{group_id} создана!</b>",
+            f"Task ID: <code>{comm_id}</code>",
+            f"Дней: <b>{days_created}</b> · пар/день: <b>{len(pairs)}</b> · "
+            f"всего сообщений: <b>{len(all_jobs)}</b>",
+            f"Окно: <b>{WINDOW_START_HOUR}:00–{WINDOW_END_HOUR}:00</b>",
+            f"Начало: <b>{local_start.strftime('%d.%m.%Y %H:%M')}</b>",
+        ]
+        if days > 1:
+            report.append(
+                f"Со 2-го дня: каждый день в <b>{WINDOW_START_HOUR}:00</b>"
+            )
+        if dropped_total:
+            report.append(
+                f"⚠️ Отброшено вне окна: <b>{dropped_total}</b> "
+                f"(не переносятся на следующий день)"
+            )
+        report.append("\n<b>Расписание (первые шаги 1-го дня):</b>")
+        first_day = all_jobs[0]["run_date"]
+        first_day_jobs = [j for j in all_jobs if j["run_date"] == first_day]
+        for job in first_day_jobs[:12]:
+            s = mask_phone(phone_by_id.get(job["sender_account_id"], "?"))
+            r = mask_phone(phone_by_id.get(job["receiver_account_id"], "?"))
+            t = job["planned_at"].astimezone(local_tz).strftime("%H:%M")
+            report.append(f"• {t}: <b>{s}</b> ➡️ <b>{r}</b>")
+        if len(first_day_jobs) > 12:
+            report.append(f"… и ещё {len(first_day_jobs) - 12} сообщений в 1-й день")
+        if days > 1:
+            end_local = (
+                local_start.replace(
+                    hour=WINDOW_START_HOUR, minute=0, second=0, microsecond=0
+                )
+                + timedelta(days=days - 1)
+            ).strftime("%d.%m.%Y")
+            report.append(f"\nПовтор до <b>{end_local}</b> включительно.")
 
         await message.answer(
-            "\n".join(report_lines),
+            "\n".join(report),
             reply_markup=main_menu_kb(show_admins=is_owner(message.from_user.id)),
         )
     except Exception as e:
-        logger.exception("Failed to save communication chain to SQLite")
+        logger.exception("Failed to save group dialogue jobs")
         await message.answer(
-            f"❌ Ошибка сохранения цепочки в базу данных: {e}",
+            f"❌ Ошибка сохранения в базу: {e}",
             reply_markup=main_menu_kb(show_admins=is_owner(message.from_user.id)),
         )
 

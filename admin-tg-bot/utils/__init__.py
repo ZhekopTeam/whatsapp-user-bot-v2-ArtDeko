@@ -1,5 +1,5 @@
 from .bot_commands import set_command
-from .FSM import AddAccount, AddAdmin, AddProxy, CreateChain
+from .FSM import AddAccount, AddAdmin, AddProxy, CreateGroup
 from .middlewares import CommandPriorityMiddleware
 from .wa_auth import WhatsAppAuth
 
@@ -8,7 +8,7 @@ __all__ = [
     "AddAccount",
     "AddAdmin",
     "AddProxy",
-    "CreateChain",
+    "CreateGroup",
     "CommandPriorityMiddleware",
     "WhatsAppAuth",
 ]

@@ -1,15 +1,20 @@
 from .acc_repo import AccountRepository
 from .admin_repo import AdminRepository
 from .db_engine import init_db
-from .models import Account, Admin, Proxy
+from .group_repo import MAX_GROUP_SIZE, GroupRepository
+from .models import Account, AccountGroup, AccountGroupMember, Admin, Proxy
 from .proxy_repo import ProxyRepository
 
 __all__ = [
     "init_db",
     "Account",
+    "AccountGroup",
+    "AccountGroupMember",
     "AccountRepository",
     "Admin",
     "AdminRepository",
+    "GroupRepository",
+    "MAX_GROUP_SIZE",
     "Proxy",
     "ProxyRepository",
 ]

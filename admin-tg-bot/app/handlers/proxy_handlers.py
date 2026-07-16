@@ -265,7 +265,7 @@ async def cb_proxy_assign_list(callback: CallbackQuery) -> None:
         return
     account_id = int(callback.data.split(":", 1)[1])
     rows = await _proxy_rows()
-    free = [r for r in rows if not r[5]]
+    free = [r for r in rows if not r[6]]  # is_busy
     if not free:
         await callback.answer("⚠️ Нет свободных прокси.", show_alert=True)
         return
@@ -285,7 +285,14 @@ async def cb_proxy_assign(callback: CallbackQuery) -> None:
     parts = callback.data.split(":")
     account_id = int(parts[1])
     proxy_id = parts[2]
-    await ProxyRepository().assign_to_account(account_id, proxy_id)
+
+    repo = ProxyRepository()
+    err = await repo.check_assign_allowed(account_id, proxy_id)
+    if err:
+        await callback.answer(err, show_alert=True)
+        return
+
+    await repo.assign_to_account(account_id, proxy_id)
     await callback.answer("✅ Прокси привязан")
 
     from app.keyboards import account_detail_kb
@@ -295,7 +302,7 @@ async def cb_proxy_assign(callback: CallbackQuery) -> None:
     if target:
         _, phone, status = target
         status_emoji = "✅" if status == "active" else "⚠️"
-        proxy = await ProxyRepository().get_by_id(proxy_id)
+        proxy = await repo.get_by_id(proxy_id)
         proxy_text = f"\n🌐 Прокси: <b>{proxy.name}</b> (<code>{proxy.host}:{proxy.port}</code>)" if proxy else ""
         text = (
             f"Статус: <code>{status}</code> {status_emoji}\n\n"

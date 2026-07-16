@@ -115,6 +115,8 @@ func New(ctx context.Context, settings *config.Settings) (*App, error) {
 			accountsRepo,
 			sender,
 			settings.DispatchBatchSize,
+			location,
+			22,
 		),
 	}, nil
 }

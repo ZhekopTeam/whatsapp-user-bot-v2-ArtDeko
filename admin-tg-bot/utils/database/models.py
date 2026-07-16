@@ -57,3 +57,33 @@ class Admin(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
     )
+
+
+class AccountGroup(Base):
+    """Group of WhatsApp accounts for automated pairwise warm-up (max 6)."""
+
+    __tablename__ = "account_groups"
+
+    id: Mapped[int] = mapped_column(
+        Integer, primary_key=True, autoincrement=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+
+class AccountGroupMember(Base):
+    __tablename__ = "account_group_members"
+
+    group_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("account_groups.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    account_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("accounts.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
