@@ -80,6 +80,7 @@ func New(ctx context.Context, settings *config.Settings) (*App, error) {
 	dispatcher := scheduler.NewDispatcher(
 		jobsRepo,
 		accountsRepo,
+		adminProxyRepo,
 		sender,
 		generator,
 		settings.DispatchBatchSize,

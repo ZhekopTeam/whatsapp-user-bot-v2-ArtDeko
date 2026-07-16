@@ -141,7 +141,9 @@ func (m *Manager) ClientByPhone(phone string) (*whatsmeow.Client, bool) {
 }
 
 // ConnectDevice регистрирует и подключает новое устройство в живой пул менеджера.
-func (m *Manager) ConnectDevice(ctx context.Context, device *store.Device) error {
+// proxyOverride, если задан, применяется вместо результата ProxyLookup — нужно
+// сразу после авторизации, когда аккаунт ещё не записан в admin-БД.
+func (m *Manager) ConnectDevice(ctx context.Context, device *store.Device, proxyOverride string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -165,17 +167,20 @@ func (m *Manager) ConnectDevice(ctx context.Context, device *store.Device) error
 	client := whatsmeow.NewClient(device, clientLog)
 	client.AddEventHandler(makeEventHandler(phone, m.OnStatusChange))
 
-	// Apply proxy if one is assigned to this phone
-	if m.ProxyLookup != nil && phone != "" {
+	// Apply proxy: explicit override wins, otherwise look up by phone.
+	proxyURL := proxyOverride
+	if proxyURL == "" && m.ProxyLookup != nil && phone != "" {
 		if proxy, err := m.ProxyLookup(ctx, phone); err != nil {
 			log.Printf("proxy lookup for %s: %v (continuing without proxy)", phone, err)
 		} else if proxy != nil {
-			proxyURL := proxy.URL()
-			if err := client.SetProxyAddress(proxyURL); err != nil {
-				log.Printf("set proxy for %s: %v", phone, err)
-			} else {
-				log.Printf("proxy set for %s (dynamic): %s://%s:%d", phone, proxy.ProxyType, proxy.Host, proxy.Port)
-			}
+			proxyURL = proxy.URL()
+		}
+	}
+	if proxyURL != "" {
+		if err := client.SetProxyAddress(proxyURL); err != nil {
+			log.Printf("set proxy for %s: %v", phone, err)
+		} else {
+			log.Printf("proxy set for %s (dynamic)", phone)
 		}
 	}
 
@@ -194,7 +199,8 @@ func (m *Manager) ConnectDevice(ctx context.Context, device *store.Device) error
 
 // EnsureClientConnected проверяет, есть ли активная сессия в памяти.
 // Если нет, но сессия существует в multi.db, загружает и запускает её.
-func (m *Manager) EnsureClientConnected(ctx context.Context, phone string) error {
+// proxyOverride применяется при первом подключении сразу после авторизации.
+func (m *Manager) EnsureClientConnected(ctx context.Context, phone string, proxyOverride string) error {
 	normalized := normalizePhone(phone)
 
 	m.mu.RLock()
@@ -227,7 +233,7 @@ func (m *Manager) EnsureClientConnected(ctx context.Context, phone string) error
 		return fmt.Errorf("device for phone %s not found in store", phone)
 	}
 
-	return m.ConnectDevice(ctx, matchDevice)
+	return m.ConnectDevice(ctx, matchDevice, proxyOverride)
 }
 
 func normalizePhone(phone string) string {

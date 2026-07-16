@@ -3,6 +3,7 @@ package whatsapp
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"time"
 
@@ -33,6 +34,7 @@ type QREvent struct {
 func (m *Manager) AuthorizeByPhone(
 	ctx context.Context,
 	phone string,
+	proxyURL string,
 	logger waLog.Logger,
 	emit func(QREvent),
 ) (deviceJID string, alreadyExists bool, err error) {
@@ -62,6 +64,17 @@ func (m *Manager) AuthorizeByPhone(
 
 	device := container.NewDevice()
 	client := whatsmeow.NewClient(device, logger)
+
+	// Apply the proxy BEFORE connecting so the account is linked from the same
+	// IP it will later run on. Mismatched IPs (auth vs runtime) are a common
+	// cause of "logged out from another device".
+	if proxyURL != "" {
+		if err := client.SetProxyAddress(proxyURL); err != nil {
+			log.Printf("auth: set proxy for %s failed: %v (continuing without proxy)", phone, err)
+		} else {
+			log.Printf("auth: proxy applied for %s during authorization", phone)
+		}
+	}
 
 	// connectedCh закрывается, когда WhatsApp подтверждает сессию (events.Connected).
 	// loggedOutCh получает причину, если сервер сразу же отклоняет нас (401).
@@ -147,7 +160,7 @@ func (m *Manager) EnsureSession(ctx context.Context, phone string) (deviceJID st
 			qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stdout)
 		}
 	}
-	jid, exists, err := m.AuthorizeByPhone(ctx, phone, logger, emit)
+	jid, exists, err := m.AuthorizeByPhone(ctx, phone, "", logger, emit)
 	if err == nil && !exists {
 		fmt.Fprintln(os.Stdout, "WhatsApp login succeeded")
 	}

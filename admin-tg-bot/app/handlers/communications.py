@@ -17,9 +17,6 @@ from app.keyboards import (
     group_days_options_kb,
     group_detail_kb,
     group_finished_list_kb,
-    group_no_proxy_warning_kb,
-    group_proxy_manage_kb,
-    group_proxy_pick_kb,
     group_time_options_kb,
     main_menu_kb,
 )
@@ -271,43 +268,6 @@ async def cancel_jobs_for_comm(
         await db.commit()
 
 
-async def validate_group_proxies(
-    account_ids: list[int],
-    *,
-    exclude_group_id: int | None = None,
-    proxy_id: str | None = None,
-) -> str | None:
-    """Validate proxy uniqueness for a group.
-
-    Proxy is bound to the group (not to accounts). One proxy → one group.
-    """
-    if proxy_id is None and exclude_group_id is not None:
-        group = await GroupRepository().get_by_id(exclude_group_id)
-        proxy_id = group.proxy_id if group else None
-
-    if not proxy_id:
-        return None
-
-    owner = await GroupRepository().get_group_id_for_proxy(proxy_id)
-    if owner is not None and owner != exclude_group_id:
-        return (
-            "Этот прокси уже привязан к другой группе.\n"
-            "Один прокси — только одна группа."
-        )
-    return None
-
-
-async def _free_proxy_rows() -> list[tuple[str, str, str, str, int]]:
-    repo = ProxyRepository()
-    used = await GroupRepository().list_used_proxy_ids()
-    free: list[tuple[str, str, str, str, int]] = []
-    for p in await repo.get_all():
-        if p.id in used:
-            continue
-        free.append((p.id, p.name, p.proxy_type, p.host, p.port))
-    return free
-
-
 def _end_date_for_start(start_time: datetime, days: int) -> str:
     local_tz = get_bot_timezone()
     local_start = start_time.astimezone(local_tz)
@@ -327,7 +287,10 @@ async def _groups_menu_payload() -> tuple[str, object]:
     group_repo = GroupRepository()
     local_tz = get_bot_timezone()
     today = datetime.now(local_tz).strftime("%Y-%m-%d")
-    await group_repo.auto_finish_expired(today)
+    expired = await group_repo.auto_finish_expired(today)
+    for g in expired:
+        if g.comm_id:
+            await cancel_jobs_for_comm(g.comm_id)
 
     enabled = await group_repo.get_by_status(STATUS_ENABLED)
     finished = await group_repo.get_by_status(STATUS_FINISHED)
@@ -401,7 +364,6 @@ async def _build_preview_text(data: dict) -> str:
     phone_by_id = _phone_map_from_available(available)
     start_iso = data.get("start_time_iso")
     days = int(data.get("days") or 1)
-    proxy_id = data.get("proxy_id")
 
     start_time = datetime.fromisoformat(start_iso)
     if start_time.tzinfo is None:
@@ -411,22 +373,30 @@ async def _build_preview_text(data: dict) -> str:
     end_date = _end_date_for_start(start_time, days)
     end_display = datetime.strptime(end_date, "%Y-%m-%d").strftime("%d.%m.%Y")
 
-    accounts_lines = "\n".join(
-        f"  {i}. <b>{mask_phone(phone_by_id.get(acc_id, '?'))}</b>"
-        for i, acc_id in enumerate(selected_ids, start=1)
-    )
+    acc_repo = AccountRepository()
+    accounts_lines_parts = []
+    with_proxy = 0
+    for i, acc_id in enumerate(selected_ids, start=1):
+        acc = await acc_repo.get_by_id(acc_id)
+        has_proxy = bool(acc and acc.proxy_id)
+        if has_proxy:
+            with_proxy += 1
+        mark = "🌐" if has_proxy else "⚠️"
+        accounts_lines_parts.append(
+            f"  {i}. <b>{mask_phone(phone_by_id.get(acc_id, '?'))}</b> {mark}"
+        )
+    accounts_lines = "\n".join(accounts_lines_parts)
 
-    if proxy_id:
-        proxy = await ProxyRepository().get_by_id(proxy_id)
-        if proxy:
-            proxy_line = (
-                f"🌐 Прокси: <b>{proxy.name}</b> "
-                f"(<code>{proxy.host}:{proxy.port}</code>)"
-            )
-        else:
-            proxy_line = "🌐 Прокси: выбран (не найден в базе)"
+    total = len(selected_ids)
+    if with_proxy == total:
+        proxy_line = "🌐 Прокси: у каждого аккаунта свой (задан при авторизации)"
+    elif with_proxy == 0:
+        proxy_line = "⚠️ Прокси: ни у одного аккаунта нет (риск слёта)"
     else:
-        proxy_line = "🌐 Прокси: без прокси"
+        proxy_line = (
+            f"⚠️ Прокси: есть у <b>{with_proxy}</b> из <b>{total}</b> "
+            "(⚠️ = без прокси)"
+        )
 
     return (
         "📋 <b>Проверьте данные группы:</b>\n\n"
@@ -459,21 +429,6 @@ async def _ask_days_new(
         f"Сообщения после {WINDOW_END_HOUR}:00 отменяются (не переносятся)."
     )
     markup = group_days_options_kb()
-    if edit:
-        await message.edit_text(text, reply_markup=markup)
-    else:
-        await message.answer(text, reply_markup=markup)
-
-
-async def _ask_proxy(message: Message, state: FSMContext, *, edit: bool) -> None:
-    free = await _free_proxy_rows()
-    await state.set_state(CreateGroup.choosing_proxy)
-    text = (
-        "🌐 <b>Выберите прокси для группы</b>\n\n"
-        "Один прокси — только одна группа (до 6 аккаунтов).\n"
-        "Прокси применяется ко всем аккаунтам группы."
-    )
-    markup = group_proxy_pick_kb(free)
     if edit:
         await message.edit_text(text, reply_markup=markup)
     else:
@@ -528,15 +483,6 @@ async def _create_and_schedule(
     if start_err:
         await message.answer(
             f"⚠️ {start_err}",
-            reply_markup=main_menu_kb(show_admins=is_owner(message.from_user.id)),
-        )
-        await state.clear()
-        return
-
-    proxy_err = await validate_group_proxies(selected_ids, proxy_id=proxy_id)
-    if proxy_err:
-        await message.answer(
-            f"⚠️ {proxy_err}",
             reply_markup=main_menu_kb(show_admins=is_owner(message.from_user.id)),
         )
         await state.clear()
@@ -723,18 +669,15 @@ async def cb_group_view(callback: CallbackQuery) -> None:
     members = await group_repo.get_members(group_id)
     title = group.name or f"Группа #{group_id}"
     lines = [f"👥 <b>{title}</b> (#{group_id})\n"]
+    proxy_repo = ProxyRepository()
     for i, acc in enumerate(members, start=1):
-        lines.append(f"{i}. <b>{mask_phone(acc.phone)}</b>")
+        proxy_label = "⚠️ без прокси"
+        if acc.proxy_id:
+            proxy = await proxy_repo.get_by_id(acc.proxy_id)
+            proxy_label = f"🌐 {proxy.name}" if proxy else "🌐 (прокси удалён)"
+        lines.append(f"{i}. <b>{mask_phone(acc.phone)}</b> — {proxy_label}")
 
-    proxy_line = "🌐 Прокси: не привязан"
-    if group.proxy_id:
-        proxy = await ProxyRepository().get_by_id(group.proxy_id)
-        if proxy:
-            proxy_line = (
-                f"🌐 Прокси: <b>{proxy.name}</b> "
-                f"(<code>{proxy.host}:{proxy.port}</code>)"
-            )
-    lines.append(f"\n{proxy_line}")
+    lines.append("\n🌐 Прокси у каждого аккаунта свой (задаётся при авторизации).")
 
     local_tz = get_bot_timezone()
     if group.start_at:
@@ -767,7 +710,6 @@ async def cb_group_view(callback: CallbackQuery) -> None:
         reply_markup=group_detail_kb(
             group_id,
             status=group.status,
-            has_proxy=bool(group.proxy_id),
         ),
     )
     await callback.answer()
@@ -1084,8 +1026,8 @@ async def cb_group_days(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer("Допустимо от 1 до 90 дней", show_alert=True)
         return
 
-    await state.update_data(days=days)
-    await _ask_proxy(callback.message, state, edit=True)
+    await state.update_data(days=days, proxy_id=None)
+    await _show_confirm(callback.message, state, edit=True)
     await callback.answer()
 
 
@@ -1109,64 +1051,8 @@ async def handle_custom_days(message: Message, state: FSMContext) -> None:
         await state.clear()
         return
 
-    await state.update_data(days=days)
-    await _ask_proxy(message, state, edit=False)
-
-
-# ── Proxy selection (during creation) ─────────────────────────────────────────
-
-
-@router_comm.callback_query(F.data.startswith("group:pick_proxy:"))
-async def cb_group_pick_proxy(callback: CallbackQuery, state: FSMContext) -> None:
-    if not is_admin(callback.from_user.id):
-        await callback.answer()
-        return
-    proxy_id = callback.data.split(":")[-1]
-    used = await GroupRepository().list_used_proxy_ids()
-    if proxy_id in used:
-        await callback.answer(
-            "Этот прокси уже занят другой группой",
-            show_alert=True,
-        )
-        return
-    await state.update_data(proxy_id=proxy_id)
-    await _show_confirm(callback.message, state, edit=True)
-    await callback.answer()
-
-
-@router_comm.callback_query(F.data == "group:no_proxy")
-async def cb_group_no_proxy(callback: CallbackQuery, state: FSMContext) -> None:
-    if not is_admin(callback.from_user.id):
-        await callback.answer()
-        return
-    await callback.message.edit_text(
-        "⚠️ <b>Продолжить без прокси?</b>\n\n"
-        "Без прокси аккаунты группы будут ходить с IP сервера.\n"
-        "Рекомендуется выбрать отдельный прокси на группу.",
-        reply_markup=group_no_proxy_warning_kb(),
-    )
-    await callback.answer()
-
-
-@router_comm.callback_query(F.data == "group:proxy_back")
-async def cb_group_proxy_back(callback: CallbackQuery, state: FSMContext) -> None:
-    if not is_admin(callback.from_user.id):
-        await callback.answer()
-        return
-    await _ask_proxy(callback.message, state, edit=True)
-    await callback.answer()
-
-
-@router_comm.callback_query(F.data == "group:no_proxy_confirm")
-async def cb_group_no_proxy_confirm(
-    callback: CallbackQuery, state: FSMContext
-) -> None:
-    if not is_admin(callback.from_user.id):
-        await callback.answer()
-        return
-    await state.update_data(proxy_id=None)
-    await _show_confirm(callback.message, state, edit=True)
-    await callback.answer()
+    await state.update_data(days=days, proxy_id=None)
+    await _show_confirm(message, state, edit=False)
 
 
 @router_comm.callback_query(F.data == "group:confirm_ok")
@@ -1177,77 +1063,3 @@ async def cb_group_confirm_ok(callback: CallbackQuery, state: FSMContext) -> Non
     await callback.message.edit_text("⏳ Создаём группу и планируем переписку…")
     await callback.answer()
     await _create_and_schedule(callback.message, state)
-
-
-# ── Manage proxy on existing group ────────────────────────────────────────────
-
-
-@router_comm.callback_query(F.data.startswith("group:proxy:"))
-async def cb_group_proxy_manage(callback: CallbackQuery) -> None:
-    if not is_admin(callback.from_user.id):
-        await callback.answer()
-        return
-    group_id = int(callback.data.split(":")[-1])
-    group = await GroupRepository().get_by_id(group_id)
-    if not group:
-        await callback.answer("Группа не найдена", show_alert=True)
-        return
-
-    free = await _free_proxy_rows()
-    # Current group's proxy is "used" by this group — allow re-selecting it
-    if group.proxy_id:
-        proxy = await ProxyRepository().get_by_id(group.proxy_id)
-        if proxy and all(p[0] != proxy.id for p in free):
-            free.insert(
-                0,
-                (proxy.id, proxy.name, proxy.proxy_type, proxy.host, proxy.port),
-            )
-
-    current = "не привязан"
-    if group.proxy_id:
-        p = await ProxyRepository().get_by_id(group.proxy_id)
-        if p:
-            current = f"<b>{p.name}</b> (<code>{p.host}:{p.port}</code>)"
-
-    title = group.name or f"Группа #{group_id}"
-    await callback.message.edit_text(
-        f"🌐 Прокси «{title}»\n"
-        f"Сейчас: {current}\n\n"
-        "Один прокси — только одна группа.",
-        reply_markup=group_proxy_manage_kb(group_id, free),
-    )
-    await callback.answer()
-
-
-@router_comm.callback_query(F.data.startswith("group:set_proxy:"))
-async def cb_group_set_proxy(callback: CallbackQuery) -> None:
-    if not is_admin(callback.from_user.id):
-        await callback.answer()
-        return
-    # group:set_proxy:<group_id>:<proxy_id>
-    parts = callback.data.split(":")
-    group_id = int(parts[2])
-    proxy_id = parts[3]
-
-    group_repo = GroupRepository()
-    err = await group_repo.check_proxy_assign_allowed(group_id, proxy_id)
-    if err:
-        await callback.answer(err, show_alert=True)
-        return
-
-    await group_repo.set_proxy(group_id, proxy_id)
-    await callback.answer("✅ Прокси привязан к группе")
-    callback.data = f"group:view:{group_id}"
-    await cb_group_view(callback)
-
-
-@router_comm.callback_query(F.data.startswith("group:clear_proxy:"))
-async def cb_group_clear_proxy(callback: CallbackQuery) -> None:
-    if not is_admin(callback.from_user.id):
-        await callback.answer()
-        return
-    group_id = int(callback.data.split(":")[-1])
-    await GroupRepository().set_proxy(group_id, None)
-    await callback.answer("🔌 Прокси отвязан")
-    callback.data = f"group:view:{group_id}"
-    await cb_group_view(callback)

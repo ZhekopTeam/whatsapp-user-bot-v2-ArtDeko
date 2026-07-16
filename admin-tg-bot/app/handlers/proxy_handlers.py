@@ -12,22 +12,23 @@ from app.keyboards import (
 )
 from utils.access import is_admin
 from utils.FSM import AddProxy
-from utils.database import GroupRepository, Proxy, ProxyRepository
+from utils.database import Proxy, ProxyRepository
 from utils.logger import logger
 
 router_proxy = Router(name="proxy")
 
 
 async def _proxy_rows() -> list[tuple[str, str, str, str, int, bool, str | None]]:
-    """id, name, type, host, port, is_busy, group_label."""
+    """id, name, type, host, port, is_busy, account_label."""
+    from utils.session_repo import mask_phone
+
     repo = ProxyRepository()
     proxies = await repo.get_all()
     rows = []
     for p in proxies:
-        group = await repo.get_group_for_proxy(p.id)
-        if group:
-            members = await GroupRepository().get_members(group.id)
-            label = f"группа #{group.id} ({len(members)} акк.)"
+        account = await repo.get_account_for_proxy(p.id)
+        if account:
+            label = f"акк. {mask_phone(account.phone)}"
             rows.append(
                 (p.id, p.name, p.proxy_type, p.host, p.port, True, label)
             )
@@ -102,12 +103,13 @@ async def cb_proxy_menu(callback: CallbackQuery, state: FSMContext) -> None:
     rows = await _proxy_rows()
     text = (
         f"🌐 <b>Прокси</b> ({len(rows)}):\n\n"
-        "Прокси привязывается к <b>группе</b>.\n"
-        "Один прокси — только одна группа."
+        "Прокси привязывается к <b>аккаунту</b> при авторизации.\n"
+        "Один прокси — один аккаунт."
         if rows
         else (
             "🌐 Прокси не добавлены.\n\n"
-            "Прокси привязывается к группе (не к аккаунту)."
+            "Прокси выбирается при добавлении аккаунта и "
+            "привязывается к нему (один прокси — один аккаунт)."
         )
     )
     await callback.message.edit_text(text, reply_markup=proxy_list_kb(rows))
@@ -126,20 +128,15 @@ async def cb_proxy_detail(callback: CallbackQuery) -> None:
         await callback.answer("Прокси не найден", show_alert=True)
         return
 
-    accounts = await repo.get_accounts_via_group(proxy_id)
-    group = await repo.get_group_for_proxy(proxy_id)
+    account = await repo.get_account_for_proxy(proxy_id)
 
-    if group:
+    if account:
         from utils.session_repo import mask_phone
-        accounts_list = "\n".join(
-            f"• <b>{mask_phone(acc.phone)}</b>" for acc in accounts
-        ) or "—"
         status_str = (
-            f"🔴 Занят группой <b>#{group.id}</b> "
-            f"({len(accounts)} акк.):\n{accounts_list}"
+            f"🔴 Привязан к аккаунту <b>{mask_phone(account.phone)}</b>"
         )
     else:
-        status_str = "🟢 Свободен (можно привязать к одной группе)"
+        status_str = "🟢 Свободен (выберите при добавлении аккаунта)"
 
     auth = f"{proxy.username}:***@" if proxy.username else ""
     text = (
@@ -147,7 +144,7 @@ async def cb_proxy_detail(callback: CallbackQuery) -> None:
         f"Тип: <code>{proxy.proxy_type}</code>\n"
         f"Адрес: <code>{auth}{proxy.host}:{proxy.port}</code>\n\n"
         f"Статус:\n{status_str}\n\n"
-        "Один прокси — только одна группа (до 6 аккаунтов)."
+        "Один прокси — один аккаунт."
     )
     await callback.message.edit_text(text, reply_markup=proxy_detail_kb(proxy_id))
     await callback.answer()

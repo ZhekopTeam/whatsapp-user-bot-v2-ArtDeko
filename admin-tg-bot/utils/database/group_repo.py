@@ -183,17 +183,30 @@ class GroupRepository:
             )
         return None
 
-    async def auto_finish_expired(self, today: str) -> int:
-        """Mark enabled groups as finished when end_date < today. Returns count."""
+    async def auto_finish_expired(self, today: str) -> list[AccountGroup]:
+        """Mark enabled groups as finished when end_date < today. Returns those groups."""
         async with get_session_factory()() as session:
             result = await session.execute(
-                sa_update(AccountGroup)
-                .where(
+                select(AccountGroup).where(
                     AccountGroup.status == STATUS_ENABLED,
                     AccountGroup.end_date.is_not(None),
                     AccountGroup.end_date < today,
                 )
-                .values(status=STATUS_FINISHED)
             )
+            groups = list(result.scalars().all())
+            if not groups:
+                return []
+            for g in groups:
+                g.status = STATUS_FINISHED
             await session.commit()
-            return result.rowcount or 0
+            # Detach copies with fields we need after session closes
+            return [
+                AccountGroup(
+                    id=g.id,
+                    name=g.name,
+                    status=g.status,
+                    comm_id=g.comm_id,
+                    end_date=g.end_date,
+                )
+                for g in groups
+            ]

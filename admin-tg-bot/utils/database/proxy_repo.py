@@ -35,6 +35,25 @@ class ProxyRepository:
             await session.commit()
             return result.rowcount > 0
 
+    async def get_account_for_proxy(self, proxy_id: str) -> Account | None:
+        """The account this proxy is bound to (proxy is one-per-account now)."""
+        async with get_session_factory()() as session:
+            result = await session.execute(
+                select(Account).where(Account.proxy_id == proxy_id)
+            )
+            return result.scalars().first()
+
+    async def list_free(self) -> list[Proxy]:
+        """Proxies not yet bound to any account."""
+        async with get_session_factory()() as session:
+            taken = select(Account.proxy_id).where(Account.proxy_id.is_not(None))
+            result = await session.execute(
+                select(Proxy)
+                .where(Proxy.id.not_in(taken))
+                .order_by(Proxy.created_at)
+            )
+            return list(result.scalars().all())
+
     async def get_group_for_proxy(self, proxy_id: str) -> AccountGroup | None:
         from .group_repo import STATUS_ENABLED
 

@@ -3,6 +3,7 @@ import json
 import os
 from io import BytesIO
 from typing import AsyncIterator, Optional
+from urllib.parse import quote
 
 import aiohttp
 import qrcode
@@ -14,6 +15,19 @@ from utils.logger import logger
 
 def normalize_phone(phone: str) -> str:
     return "".join(ch for ch in phone if ch.isdigit())
+
+
+def build_proxy_url(proxy) -> str:
+    """Build a proxy URL matching the Go daemon's expected format.
+
+    socks5://user:pass@host:port  or  socks5://host:port
+    """
+    scheme = (proxy.proxy_type or "socks5").lower()
+    if proxy.username:
+        user = quote(proxy.username, safe="")
+        pwd = quote(proxy.password or "", safe="")
+        return f"{scheme}://{user}:{pwd}@{proxy.host}:{proxy.port}"
+    return f"{scheme}://{proxy.host}:{proxy.port}"
 
 
 def is_valid_phone(phone: str) -> bool:
@@ -49,7 +63,9 @@ class WhatsAppAuth:
     def busy(self) -> bool:
         return self._session is not None
 
-    async def stream(self, admin_tg_id: int, phone: str) -> AsyncIterator[dict]:
+    async def stream(
+        self, admin_tg_id: int, phone: str, proxy_url: str | None = None
+    ) -> AsyncIterator[dict]:
         if not is_admin(admin_tg_id):
             raise PermissionError("User is not admin")
         if self.busy:
@@ -58,11 +74,16 @@ class WhatsAppAuth:
 
         self._session = aiohttp.ClientSession()
         self._cancelled = False
-        logger.info(f"HTTP auth stream starting for {phone} (admin={admin_tg_id})")
+        logger.info(
+            f"HTTP auth stream starting for {phone} "
+            f"(admin={admin_tg_id}, proxy={'yes' if proxy_url else 'no'})"
+        )
 
         try:
             url = f"{settings.WHATSAPP_API_URL}/auth/qr"
             params = {"phone": phone}
+            if proxy_url:
+                params["proxy"] = proxy_url
             
             self._response = await self._session.get(
                 url, params=params, timeout=settings.AUTH_TIMEOUT_SEC

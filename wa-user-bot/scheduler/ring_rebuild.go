@@ -17,9 +17,9 @@ const (
 )
 
 // rebuildRingAfterDrop rebuilds the dialogue ring for remaining accounts in each
-// affected communication. Example: [1,2,3,4] drop 3 → pairs among [1,2,4]
+// affected ACTIVE communication. Example: [1,2,3,4] drop 3 → pairs among [1,2,4]
 // including the new bridge 2↔4.
-// Returns the list of rebuilt/affected comm IDs.
+// Stale leftover tasks (not in enabled groups) only cancel jobs involving the account.
 func (d *Dispatcher) rebuildRingAfterDrop(ctx context.Context, droppedAccountID int64, reason string) []int64 {
 	if d.generator == nil {
 		log.Printf("[dispatcher] ring rebuild skipped: no message generator")
@@ -44,12 +44,40 @@ func (d *Dispatcher) rebuildRingAfterDrop(ctx context.Context, droppedAccountID 
 		return nil
 	}
 
+	activeComms := map[int64]struct{}{}
+	if d.adminRepo != nil {
+		activeComms, err = d.adminRepo.ListEnabledCommIDs(ctx)
+		if err != nil {
+			log.Printf("[dispatcher] list enabled comms: %v (treating all as active)", err)
+			activeComms = nil
+		}
+	}
+
+	affected := make([]int64, 0, len(commIDs))
 	for _, commID := range commIDs {
+		isActive := activeComms == nil
+		if activeComms != nil {
+			_, isActive = activeComms[commID]
+		}
+		if !isActive {
+			n, cancelErr := d.jobsRepo.CancelJobsInvolvingAccountInComm(ctx, commID, droppedAccountID,
+				reason+" (stale comm, no rebuild)")
+			if cancelErr != nil {
+				log.Printf("[dispatcher] cancel stale jobs for account %d in comm %d: %v",
+					droppedAccountID, commID, cancelErr)
+			} else {
+				log.Printf("[dispatcher] comm %d not in enabled groups: cancelled %d job(s) involving %d (no rebuild)",
+					commID, n, droppedAccountID)
+			}
+			affected = append(affected, commID)
+			continue
+		}
 		if err := d.rebuildCommRing(ctx, commID, droppedAccountID, reason); err != nil {
 			log.Printf("[dispatcher] rebuild comm %d after drop %d: %v", commID, droppedAccountID, err)
 		}
+		affected = append(affected, commID)
 	}
-	return commIDs
+	return affected
 }
 
 func (d *Dispatcher) rebuildCommRing(ctx context.Context, commID, droppedAccountID int64, reason string) error {

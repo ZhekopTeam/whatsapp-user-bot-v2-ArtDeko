@@ -14,6 +14,15 @@ class AccountRepository:
             await session.refresh(account)
             return account
 
+    async def set_proxy(self, account_id: int, proxy_id: str | None) -> None:
+        async with get_session_factory()() as session:
+            await session.execute(
+                sa_update(Account)
+                .where(Account.id == account_id)
+                .values(proxy_id=proxy_id)
+            )
+            await session.commit()
+
     async def get_all(self) -> list[Account]:
         async with get_session_factory()() as session:
             result = await session.execute(
@@ -45,7 +54,11 @@ class AccountRepository:
             return result.scalar_one_or_none()
 
     async def reactivate(
-        self, phone: str, jid: str | None, admin_tg_id: int
+        self,
+        phone: str,
+        jid: str | None,
+        admin_tg_id: int,
+        proxy_id: str | None = None,
     ) -> None:
         async with get_session_factory()() as session:
             await session.execute(
@@ -55,6 +68,7 @@ class AccountRepository:
                     jid=jid,
                     status="active",
                     admin_tg_id=admin_tg_id,
+                    proxy_id=proxy_id,
                 )
             )
             await session.commit()

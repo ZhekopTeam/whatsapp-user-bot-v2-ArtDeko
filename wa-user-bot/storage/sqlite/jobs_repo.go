@@ -302,6 +302,27 @@ func (r *JobsRepo) CancelJobsInvolvingAccount(ctx context.Context, accountID int
 	return n, nil
 }
 
+// CancelJobsInvolvingAccountInComm cancels pending/sending jobs for one comm only.
+func (r *JobsRepo) CancelJobsInvolvingAccountInComm(ctx context.Context, commID, accountID int64, reason string) (int64, error) {
+	if reason == "" {
+		reason = "cancelled: account excluded from dialogue"
+	}
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE message_jobs
+		SET status = ?, last_error = ?, updated_at = ?
+		WHERE comm_id = ?
+		  AND status IN (?, ?)
+		  AND (sender_account_id = ? OR receiver_account_id = ?)
+	`, domain.JobStatusCancelled, reason, time.Now().UTC(),
+		commID, domain.JobStatusPending, domain.JobStatusSending,
+		accountID, accountID)
+	if err != nil {
+		return 0, fmt.Errorf("cancel jobs involving account %d in comm %d: %w", accountID, commID, err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 // ListCommIDsInvolvingAccount returns distinct comm_ids with pending/sending jobs
 // for the given account (as sender or receiver).
 func (r *JobsRepo) ListCommIDsInvolvingAccount(ctx context.Context, accountID int64) ([]int64, error) {

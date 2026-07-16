@@ -3,6 +3,7 @@ from aiogram.fsm.state import State, StatesGroup
 
 class AddAccount(StatesGroup):
     waiting_phone = State()
+    choosing_proxy = State()
     waiting_qr = State()
 
 
@@ -13,7 +14,6 @@ class CreateGroup(StatesGroup):
     waiting_custom_time = State()
     choosing_days = State()
     waiting_custom_days = State()
-    choosing_proxy = State()
     confirming = State()
 
 

@@ -53,7 +53,6 @@ def group_detail_kb(
     group_id: int,
     *,
     status: str = "enabled",
-    has_proxy: bool = False,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     if status == "finished":
@@ -63,16 +62,6 @@ def group_detail_kb(
         )
         builder.button(text="← Назад", callback_data="group:finished_list")
     else:
-        if has_proxy:
-            builder.button(
-                text="🔌 Сменить / отвязать прокси",
-                callback_data=f"group:proxy:{group_id}",
-            )
-        else:
-            builder.button(
-                text="🌐 Привязать прокси",
-                callback_data=f"group:proxy:{group_id}",
-            )
         builder.button(
             text="🗑 Удалить группу",
             callback_data=f"group:del:{group_id}",
@@ -210,6 +199,25 @@ def accounts_list_kb(accounts: list[tuple[int, str, str]]) -> InlineKeyboardMark
         )
     builder.button(text="➕ Добавить аккаунт", callback_data="add_account")
     builder.button(text="← Меню", callback_data="menu:main")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def account_proxy_pick_kb(
+    proxies: list[tuple[str, str, str, str, int]],
+    *,
+    allow_none: bool = True,
+) -> InlineKeyboardMarkup:
+    """Proxy selection shown before authorizing a new account."""
+    builder = InlineKeyboardBuilder()
+    for proxy_id, name, ptype, host, port in proxies:
+        builder.button(
+            text=f"🌐 {name} ({ptype}://{host}:{port})",
+            callback_data=f"acc_proxy:{proxy_id}",
+        )
+    if allow_none:
+        builder.button(text="🚫 Без прокси", callback_data="acc_proxy:none")
+    builder.button(text="✖️ Отмена", callback_data="auth:cancel")
     builder.adjust(1)
     return builder.as_markup()
 

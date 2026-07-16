@@ -27,6 +27,7 @@ type cooldownState struct {
 type Dispatcher struct {
 	jobsRepo      *sqlite.JobsRepo
 	accountsRepo  *sqlite.AccountsRepo
+	adminRepo     *sqlite.AdminProxyRepo
 	sender        MessageSender
 	generator     *templates.Generator
 	batchSize     int
@@ -44,6 +45,7 @@ type Dispatcher struct {
 func NewDispatcher(
 	jobsRepo *sqlite.JobsRepo,
 	accountsRepo *sqlite.AccountsRepo,
+	adminRepo *sqlite.AdminProxyRepo,
 	sender MessageSender,
 	generator *templates.Generator,
 	batchSize int,
@@ -67,6 +69,7 @@ func NewDispatcher(
 	return &Dispatcher{
 		jobsRepo:      jobsRepo,
 		accountsRepo:  accountsRepo,
+		adminRepo:     adminRepo,
 		sender:        sender,
 		generator:     generator,
 		batchSize:     batchSize,

@@ -1,5 +1,6 @@
 from .admin_kb import (
     account_detail_kb,
+    account_proxy_pick_kb,
     accounts_list_kb,
     admin_cancel_kb,
     admins_list_kb,
@@ -24,6 +25,7 @@ from .admin_kb import (
 
 __all__ = [
     "account_detail_kb",
+    "account_proxy_pick_kb",
     "accounts_list_kb",
     "admin_cancel_kb",
     "admins_list_kb",

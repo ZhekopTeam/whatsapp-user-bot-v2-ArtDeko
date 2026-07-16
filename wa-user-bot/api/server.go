@@ -60,6 +60,7 @@ func (s *Server) handleAuthQR(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"phone parameter is required"}`, http.StatusBadRequest)
 		return
 	}
+	proxyURL := strings.TrimSpace(r.URL.Query().Get("proxy"))
 
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.Header().Set("Transfer-Encoding", "chunked")
@@ -77,8 +78,8 @@ func (s *Server) handleAuthQR(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 	}
 
-	log.Printf("API: Starting WhatsApp auth for phone: %s", phone)
-	deviceJID, alreadyExists, err := s.manager.AuthorizeByPhone(r.Context(), phone, waLog.Noop, emit)
+	log.Printf("API: Starting WhatsApp auth for phone: %s (proxy set: %t)", phone, proxyURL != "")
+	deviceJID, alreadyExists, err := s.manager.AuthorizeByPhone(r.Context(), phone, proxyURL, waLog.Noop, emit)
 	if err != nil {
 		emit(whatsapp.QREvent{Type: whatsapp.QREventError, Message: err.Error()})
 		return
@@ -86,7 +87,7 @@ func (s *Server) handleAuthQR(w http.ResponseWriter, r *http.Request) {
 
 	if !alreadyExists {
 		// Подключаем новое авторизованное устройство в живой пул
-		if err := s.manager.EnsureClientConnected(r.Context(), phone); err != nil {
+		if err := s.manager.EnsureClientConnected(r.Context(), phone, proxyURL); err != nil {
 			log.Printf("API: Failed to dynamically connect new device for phone %s: %v", phone, err)
 			emit(whatsapp.QREvent{Type: whatsapp.QREventError, Message: fmt.Sprintf("failed to connect device: %v", err)})
 			return
