@@ -85,6 +85,28 @@ func (r *AccountsRepo) GetByID(ctx context.Context, accountID int64) (domain.Acc
 	return account, nil
 }
 
+func (r *AccountsRepo) GetByPhone(ctx context.Context, phone string) (domain.Account, error) {
+	var account domain.Account
+	// Match both raw digits and +prefix forms.
+	err := r.db.QueryRowContext(ctx, `
+		SELECT account_id, phone, status, created_at, updated_at, last_seen_at
+		FROM accounts
+		WHERE phone = ? OR phone = ? OR REPLACE(phone, '+', '') = REPLACE(?, '+', '')
+		LIMIT 1
+	`, phone, "+"+phone, phone).Scan(
+		&account.AccountID,
+		&account.Phone,
+		&account.Status,
+		&account.CreatedAt,
+		&account.UpdatedAt,
+		&account.LastSeenAt,
+	)
+	if err != nil {
+		return domain.Account{}, err
+	}
+	return account, nil
+}
+
 func (r *AccountsRepo) UpdateStatus(ctx context.Context, accountID int64, status string) error {
 	_, err := r.db.ExecContext(ctx, `
 		UPDATE accounts
@@ -101,8 +123,8 @@ func (r *AccountsRepo) UpdateStatusByPhone(ctx context.Context, phone, status st
 	_, err := r.db.ExecContext(ctx, `
 		UPDATE accounts
 		SET status = ?, updated_at = ?
-		WHERE phone = ?
-	`, status, time.Now().UTC(), phone)
+		WHERE phone = ? OR phone = ? OR REPLACE(phone, '+', '') = REPLACE(?, '+', '')
+	`, status, time.Now().UTC(), phone, "+"+phone, phone)
 	if err != nil {
 		return fmt.Errorf("update account status by phone: %w", err)
 	}

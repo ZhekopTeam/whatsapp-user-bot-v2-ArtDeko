@@ -63,11 +63,6 @@ func New(ctx context.Context, settings *config.Settings) (*App, error) {
 	}
 
 	manager := whatsapp.NewManager(settings.SessionDBPath)
-	manager.OnStatusChange = func(phone, status string) {
-		if err := accountsRepo.UpdateStatusByPhone(context.Background(), phone, status); err != nil {
-			log.Printf("update account status for phone %s: %v", phone, err)
-		}
-	}
 
 	// Wire proxy lookup from admin DB (non-fatal if DB is unavailable)
 	adminProxyRepo, proxyErr := sqlite.NewAdminProxyRepo(settings.AdminDBPath)
@@ -82,6 +77,32 @@ func New(ctx context.Context, settings *config.Settings) (*App, error) {
 
 	sender := whatsapp.NewSender(manager)
 	apiServer := api.NewServer(manager, settings.APIPort)
+	dispatcher := scheduler.NewDispatcher(
+		jobsRepo,
+		accountsRepo,
+		sender,
+		generator,
+		settings.DispatchBatchSize,
+		location,
+		22,
+		12, // match admin group warmup REPLY_DELAY_MIN/MAX
+		20,
+	)
+
+	// Status updates + drop logged-out accounts from pending dialogue immediately.
+	// Transient Disconnected is handled on next send attempt (avoids killing jobs on brief flaps).
+	manager.OnStatusChange = func(phone, status string) {
+		if err := accountsRepo.UpdateStatusByPhone(context.Background(), phone, status); err != nil {
+			log.Printf("update account status for phone %s: %v", phone, err)
+		}
+		if status == domain.AccountStatusBlocked || status == domain.AccountStatusFailed {
+			dispatcher.ExcludeAccountByPhone(
+				context.Background(),
+				phone,
+				fmt.Sprintf("cancelled: account status %s", status),
+			)
+		}
+	}
 
 	return &App{
 		settings:       settings,
@@ -110,14 +131,7 @@ func New(ctx context.Context, settings *config.Settings) (*App, error) {
 			settings.ReplyDelayMinMinutes,
 			settings.ReplyDelayMaxMinutes,
 		),
-		dispatcher: scheduler.NewDispatcher(
-			jobsRepo,
-			accountsRepo,
-			sender,
-			settings.DispatchBatchSize,
-			location,
-			22,
-		),
+		dispatcher: dispatcher,
 	}, nil
 }
 

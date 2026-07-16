@@ -7,11 +7,14 @@ class AddAccount(StatesGroup):
 
 
 class CreateGroup(StatesGroup):
+    waiting_name = State()
     choosing_accounts = State()
     choosing_start_time = State()
     waiting_custom_time = State()
     choosing_days = State()
     waiting_custom_days = State()
+    choosing_proxy = State()
+    confirming = State()
 
 
 class AddProxy(StatesGroup):

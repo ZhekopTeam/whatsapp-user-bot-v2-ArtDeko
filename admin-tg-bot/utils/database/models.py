@@ -67,6 +67,21 @@ class AccountGroup(Base):
     id: Mapped[int] = mapped_column(
         Integer, primary_key=True, autoincrement=True
     )
+    name: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    status: Mapped[str] = mapped_column(
+        String(16), default="enabled", nullable=False
+    )  # enabled | finished
+    proxy_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("proxies.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    start_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    days: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    end_date: Mapped[str | None] = mapped_column(String(10), nullable=True)  # YYYY-MM-DD
+    comm_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

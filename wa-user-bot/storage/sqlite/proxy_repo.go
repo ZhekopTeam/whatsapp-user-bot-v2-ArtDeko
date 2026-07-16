@@ -39,8 +39,8 @@ func (r *AdminProxyRepo) Close() {
 	}
 }
 
-// GetProxyForPhone returns the proxy assigned to the account with the given phone number,
-// or nil if no proxy is assigned or the proxies table does not exist.
+// GetProxyForPhone returns the proxy assigned to the account's group,
+// or nil if the account is not in a group / group has no proxy.
 func (r *AdminProxyRepo) GetProxyForPhone(ctx context.Context, phone string) (*domain.Proxy, error) {
 	if r == nil || r.db == nil {
 		return nil, nil
@@ -49,7 +49,36 @@ func (r *AdminProxyRepo) GetProxyForPhone(ctx context.Context, phone string) (*d
 	var proxy domain.Proxy
 	var username, password sql.NullString
 
+	// Preferred: proxy bound to account group
 	err := r.db.QueryRowContext(ctx, `
+		SELECT p.id, p.name, p.proxy_type, p.host, p.port, p.username, p.password
+		FROM accounts a
+		JOIN account_group_members m ON m.account_id = a.id
+		JOIN account_groups g ON g.id = m.group_id
+		JOIN proxies p ON p.id = g.proxy_id
+		WHERE a.phone = ?
+		LIMIT 1
+	`, phone).Scan(
+		&proxy.ID,
+		&proxy.Name,
+		&proxy.ProxyType,
+		&proxy.Host,
+		&proxy.Port,
+		&username,
+		&password,
+	)
+	if err == nil {
+		proxy.Username = username.String
+		proxy.Password = password.String
+		return &proxy, nil
+	}
+	if err != sql.ErrNoRows {
+		// Tables may not exist yet — fall through to legacy lookup
+		_ = err
+	}
+
+	// Legacy fallback: account.proxy_id (pre group-binding)
+	err = r.db.QueryRowContext(ctx, `
 		SELECT p.id, p.name, p.proxy_type, p.host, p.port, p.username, p.password
 		FROM accounts a
 		JOIN proxies p ON a.proxy_id = p.id
@@ -68,7 +97,6 @@ func (r *AdminProxyRepo) GetProxyForPhone(ctx context.Context, phone string) (*d
 		return nil, nil
 	}
 	if err != nil {
-		// Table may not exist if the bot hasn't created it yet — treat as no proxy
 		return nil, nil
 	}
 

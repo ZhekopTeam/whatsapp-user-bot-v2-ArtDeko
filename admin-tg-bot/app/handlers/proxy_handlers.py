@@ -6,28 +6,35 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from app.keyboards import (
-    proxy_assign_list_kb,
     proxy_cancel_kb,
     proxy_detail_kb,
     proxy_list_kb,
 )
 from utils.access import is_admin
 from utils.FSM import AddProxy
-from utils.database import Proxy, ProxyRepository
+from utils.database import GroupRepository, Proxy, ProxyRepository
 from utils.logger import logger
 
 router_proxy = Router(name="proxy")
 
 
-async def _proxy_rows() -> list[tuple[str, str, str, str, int, int, bool]]:
+async def _proxy_rows() -> list[tuple[str, str, str, str, int, bool, str | None]]:
+    """id, name, type, host, port, is_busy, group_label."""
     repo = ProxyRepository()
     proxies = await repo.get_all()
     rows = []
     for p in proxies:
-        accounts = await repo.get_accounts_for_proxy(p.id)
-        usage_count = len(accounts)
-        is_busy = usage_count >= 6
-        rows.append((p.id, p.name, p.proxy_type, p.host, p.port, usage_count, is_busy))
+        group = await repo.get_group_for_proxy(p.id)
+        if group:
+            members = await GroupRepository().get_members(group.id)
+            label = f"группа #{group.id} ({len(members)} акк.)"
+            rows.append(
+                (p.id, p.name, p.proxy_type, p.host, p.port, True, label)
+            )
+        else:
+            rows.append(
+                (p.id, p.name, p.proxy_type, p.host, p.port, False, None)
+            )
     return rows
 
 
@@ -94,8 +101,14 @@ async def cb_proxy_menu(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     rows = await _proxy_rows()
     text = (
-        f"🌐 <b>Прокси</b> ({len(rows)}):" if rows
-        else "🌐 Прокси не добавлены."
+        f"🌐 <b>Прокси</b> ({len(rows)}):\n\n"
+        "Прокси привязывается к <b>группе</b>.\n"
+        "Один прокси — только одна группа."
+        if rows
+        else (
+            "🌐 Прокси не добавлены.\n\n"
+            "Прокси привязывается к группе (не к аккаунту)."
+        )
     )
     await callback.message.edit_text(text, reply_markup=proxy_list_kb(rows))
     await callback.answer()
@@ -113,23 +126,28 @@ async def cb_proxy_detail(callback: CallbackQuery) -> None:
         await callback.answer("Прокси не найден", show_alert=True)
         return
 
-    accounts = await repo.get_accounts_for_proxy(proxy_id)
-    usage_count = len(accounts)
-    is_busy = usage_count >= 6
+    accounts = await repo.get_accounts_via_group(proxy_id)
+    group = await repo.get_group_for_proxy(proxy_id)
 
-    if usage_count > 0:
+    if group:
         from utils.session_repo import mask_phone
-        accounts_list = "\n".join([f"• <b>{mask_phone(acc.phone)}</b>" for acc in accounts])
-        status_str = f"Используется аккаунтами ({usage_count}/6):\n{accounts_list}"
+        accounts_list = "\n".join(
+            f"• <b>{mask_phone(acc.phone)}</b>" for acc in accounts
+        ) or "—"
+        status_str = (
+            f"🔴 Занят группой <b>#{group.id}</b> "
+            f"({len(accounts)} акк.):\n{accounts_list}"
+        )
     else:
-        status_str = "🟢 Свободен (0/6)"
+        status_str = "🟢 Свободен (можно привязать к одной группе)"
 
     auth = f"{proxy.username}:***@" if proxy.username else ""
     text = (
         f"🌐 <b>{proxy.name}</b>\n\n"
         f"Тип: <code>{proxy.proxy_type}</code>\n"
         f"Адрес: <code>{auth}{proxy.host}:{proxy.port}</code>\n\n"
-        f"Статус:\n{status_str}"
+        f"Статус:\n{status_str}\n\n"
+        "Один прокси — только одна группа (до 6 аккаунтов)."
     )
     await callback.message.edit_text(text, reply_markup=proxy_detail_kb(proxy_id))
     await callback.answer()
@@ -254,81 +272,3 @@ async def msg_proxy_name(message: Message, state: FSMContext) -> None:
         f"✅ Прокси <b>{name}</b> добавлен!\n\n🌐 <b>Прокси</b> ({len(rows)}):",
         reply_markup=proxy_list_kb(rows),
     )
-
-
-# ── Proxy assignment (from account detail) ─────────────────────────────────────
-
-@router_proxy.callback_query(F.data.startswith("proxy_assign_list:"))
-async def cb_proxy_assign_list(callback: CallbackQuery) -> None:
-    if not is_admin(callback.from_user.id):
-        await callback.answer()
-        return
-    account_id = int(callback.data.split(":", 1)[1])
-    rows = await _proxy_rows()
-    free = [r for r in rows if not r[6]]  # is_busy
-    if not free:
-        await callback.answer("⚠️ Нет свободных прокси.", show_alert=True)
-        return
-    await callback.message.edit_text(
-        "Выберите прокси для привязки к аккаунту:",
-        reply_markup=proxy_assign_list_kb(rows, account_id),
-    )
-    await callback.answer()
-
-
-@router_proxy.callback_query(F.data.startswith("proxy_assign:"))
-async def cb_proxy_assign(callback: CallbackQuery) -> None:
-    if not is_admin(callback.from_user.id):
-        await callback.answer()
-        return
-    # format: proxy_assign:<account_id>:<proxy_id>
-    parts = callback.data.split(":")
-    account_id = int(parts[1])
-    proxy_id = parts[2]
-
-    repo = ProxyRepository()
-    err = await repo.check_assign_allowed(account_id, proxy_id)
-    if err:
-        await callback.answer(err, show_alert=True)
-        return
-
-    await repo.assign_to_account(account_id, proxy_id)
-    await callback.answer("✅ Прокси привязан")
-
-    from app.keyboards import account_detail_kb
-    from utils.session_repo import get_session_accounts, mask_phone
-    accounts = await get_session_accounts()
-    target = next((a for a in accounts if a[0] == account_id), None)
-    if target:
-        _, phone, status = target
-        status_emoji = "✅" if status == "active" else "⚠️"
-        proxy = await repo.get_by_id(proxy_id)
-        proxy_text = f"\n🌐 Прокси: <b>{proxy.name}</b> (<code>{proxy.host}:{proxy.port}</code>)" if proxy else ""
-        text = (
-            f"Статус: <code>{status}</code> {status_emoji}\n\n"
-            f"Номер: <b>{mask_phone(phone)}</b>"
-            f"{proxy_text}"
-        )
-        await callback.message.edit_text(text, reply_markup=account_detail_kb(account_id, proxy_id))
-
-
-@router_proxy.callback_query(F.data.startswith("proxy_unassign:"))
-async def cb_proxy_unassign(callback: CallbackQuery) -> None:
-    if not is_admin(callback.from_user.id):
-        await callback.answer()
-        return
-    account_id = int(callback.data.split(":", 1)[1])
-    await ProxyRepository().assign_to_account(account_id, None)
-    await callback.answer("🔌 Прокси отвязан")
-    from app.keyboards import account_detail_kb
-    from utils.session_repo import get_session_accounts, mask_phone
-    accounts = await get_session_accounts()
-    target = next((a for a in accounts if a[0] == account_id), None)
-    if target:
-        _, phone, status = target
-        status_emoji = "✅" if status == "active" else "⚠️"
-        text = (
-            f"Статус: <code>{status}</code> {status_emoji}\n\n"
-            f"Номер: <b>{mask_phone(phone)}</b>"
-        )
-        await callback.message.edit_text(text, reply_markup=account_detail_kb(account_id, None))

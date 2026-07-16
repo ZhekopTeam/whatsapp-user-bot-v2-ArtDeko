@@ -5,11 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math/rand"
+	"strings"
 	"sync"
 	"time"
 
 	"my-whatsapp-bot/wa-user-bot/domain"
 	"my-whatsapp-bot/wa-user-bot/storage/sqlite"
+	"my-whatsapp-bot/wa-user-bot/templates"
 )
 
 type MessageSender interface {
@@ -22,14 +25,19 @@ type cooldownState struct {
 }
 
 type Dispatcher struct {
-	jobsRepo     *sqlite.JobsRepo
-	accountsRepo *sqlite.AccountsRepo
-	sender       MessageSender
-	batchSize    int
-	location     *time.Location
+	jobsRepo      *sqlite.JobsRepo
+	accountsRepo  *sqlite.AccountsRepo
+	sender        MessageSender
+	generator     *templates.Generator
+	batchSize     int
+	location      *time.Location
 	windowEndHour int
+	replyDelayMin int
+	replyDelayMax int
+	rand          *rand.Rand
 
 	mu        sync.Mutex
+	rebuildMu sync.Mutex
 	cooldowns map[string]cooldownState
 }
 
@@ -37,9 +45,12 @@ func NewDispatcher(
 	jobsRepo *sqlite.JobsRepo,
 	accountsRepo *sqlite.AccountsRepo,
 	sender MessageSender,
+	generator *templates.Generator,
 	batchSize int,
 	location *time.Location,
 	windowEndHour int,
+	replyDelayMin int,
+	replyDelayMax int,
 ) *Dispatcher {
 	if location == nil {
 		location = time.UTC
@@ -47,13 +58,23 @@ func NewDispatcher(
 	if windowEndHour <= 0 || windowEndHour > 23 {
 		windowEndHour = 22
 	}
+	if replyDelayMin <= 0 {
+		replyDelayMin = 12
+	}
+	if replyDelayMax < replyDelayMin {
+		replyDelayMax = replyDelayMin
+	}
 	return &Dispatcher{
 		jobsRepo:      jobsRepo,
 		accountsRepo:  accountsRepo,
 		sender:        sender,
+		generator:     generator,
 		batchSize:     batchSize,
 		location:      location,
 		windowEndHour: windowEndHour,
+		replyDelayMin: replyDelayMin,
+		replyDelayMax: replyDelayMax,
+		rand:          rand.New(rand.NewSource(time.Now().UnixNano())),
 		cooldowns:     make(map[string]cooldownState),
 	}
 }
@@ -71,7 +92,15 @@ func (d *Dispatcher) DispatchDue(ctx context.Context, now time.Time) error {
 		return fmt.Errorf("claim due jobs: %w", err)
 	}
 
+	rebuiltComms := make(map[int64]struct{})
+
 	for _, job := range jobs {
+		if _, ok := rebuiltComms[job.CommID]; ok {
+			// Already cancelled during ring rebuild in this batch.
+			_ = d.jobsRepo.MarkCancelled(ctx, job.ID, "cancelled: ring rebuilt")
+			continue
+		}
+
 		if d.isPastSendWindow(now, job.PlannedAt) {
 			log.Printf("[dispatcher] job %d past send window, cancelling", job.ID)
 			if cancelErr := d.jobsRepo.MarkCancelled(ctx, job.ID, "cancelled: past daily send window"); cancelErr != nil {
@@ -95,6 +124,22 @@ func (d *Dispatcher) DispatchDue(ctx context.Context, now time.Time) error {
 			continue
 		}
 
+		// Dead account → rebuild ring among survivors (bridge former neighbours).
+		if isAccountUnavailable(senderAccount.Status) {
+			for _, id := range d.excludeAccountFromDialogue(ctx, senderAccount.AccountID, senderAccount.Phone,
+				fmt.Sprintf("cancelled: sender unavailable (%s)", senderAccount.Status)) {
+				rebuiltComms[id] = struct{}{}
+			}
+			continue
+		}
+		if isAccountUnavailable(receiverAccount.Status) {
+			for _, id := range d.excludeAccountFromDialogue(ctx, receiverAccount.AccountID, receiverAccount.Phone,
+				fmt.Sprintf("cancelled: receiver unavailable (%s)", receiverAccount.Status)) {
+				rebuiltComms[id] = struct{}{}
+			}
+			continue
+		}
+
 		cooldownUntil := d.getCooldown(senderAccount.Phone)
 		if now.Before(cooldownUntil) {
 			log.Printf("[dispatcher] Sender %s is cooling down. Rescheduling job %d to %v", senderAccount.Phone, job.ID, cooldownUntil)
@@ -104,13 +149,14 @@ func (d *Dispatcher) DispatchDue(ctx context.Context, now time.Time) error {
 			continue
 		}
 
-		if senderAccount.Status != domain.AccountStatusReady {
-			d.markFailed(ctx, job.ID, fmt.Errorf("sender account %s is not ready (status: %s)", senderAccount.Phone, senderAccount.Status))
-			continue
-		}
-
 		if err := d.sender.SendText(ctx, senderAccount.Phone, receiverAccount.Phone, job.MessageText); err != nil {
-			d.recordFailure(ctx, senderAccount.Phone)
+			if isFatalSendError(err) || d.recordFailure(ctx, senderAccount.Phone) {
+				for _, id := range d.excludeAccountFromDialogue(ctx, senderAccount.AccountID, senderAccount.Phone,
+					fmt.Sprintf("cancelled: send failed (%v)", err)) {
+					rebuiltComms[id] = struct{}{}
+				}
+				continue
+			}
 			d.markFailed(ctx, job.ID, err)
 			continue
 		}
@@ -125,13 +171,67 @@ func (d *Dispatcher) DispatchDue(ctx context.Context, now time.Time) error {
 	return nil
 }
 
-func (d *Dispatcher) recordFailure(ctx context.Context, phone string) {
+// ExcludeAccountByPhone rebuilds dialogue rings without this phone (e.g. logout).
+func (d *Dispatcher) ExcludeAccountByPhone(ctx context.Context, phone, reason string) {
+	account, err := d.accountsRepo.GetByPhone(ctx, phone)
+	if err != nil {
+		log.Printf("[dispatcher] exclude by phone %s: lookup failed: %v", phone, err)
+		return
+	}
+	d.excludeAccountFromDialogue(ctx, account.AccountID, phone, reason)
+}
+
+func (d *Dispatcher) excludeAccountFromDialogue(ctx context.Context, accountID int64, phone, reason string) []int64 {
+	log.Printf("[dispatcher] excluding account %d (%s) and rebuilding rings — %s", accountID, phone, reason)
+	return d.rebuildRingAfterDrop(ctx, accountID, reason)
+}
+
+func isAccountUnavailable(status string) bool {
+	switch status {
+	case domain.AccountStatusDisconnected,
+		domain.AccountStatusFailed,
+		domain.AccountStatusBlocked,
+		domain.AccountStatusAuthRequired:
+		return true
+	default:
+		return false
+	}
+}
+
+func isFatalSendError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	fatalHints := []string{
+		"logged out",
+		"not connected",
+		"no device",
+		"session",
+		"unauthorized",
+		"401",
+		"websocket",
+		"no signal session",
+	}
+	for _, hint := range fatalHints {
+		if strings.Contains(msg, hint) {
+			return true
+		}
+	}
+	return false
+}
+
+// recordFailure updates cooldown. Returns true if account should be excluded from dialogue
+// (too many consecutive failures → marked disconnected).
+func (d *Dispatcher) recordFailure(ctx context.Context, phone string) bool {
 	d.mu.Lock()
 	state := d.cooldowns[phone]
 	state.consecutiveFailures++
+	failures := state.consecutiveFailures
 
 	var cooldown time.Duration
-	switch state.consecutiveFailures {
+	exclude := false
+	switch failures {
 	case 1:
 		cooldown = 1 * time.Minute
 	case 2:
@@ -142,19 +242,20 @@ func (d *Dispatcher) recordFailure(ctx context.Context, phone string) {
 		cooldown = 1 * time.Hour
 	default:
 		cooldown = 24 * time.Hour
-		d.mu.Unlock()
-		log.Printf("[dispatcher] Account %s failed 5 consecutive times, marking as disconnected in DB", phone)
-		if err := d.accountsRepo.UpdateStatusByPhone(ctx, phone, domain.AccountStatusDisconnected); err != nil {
-			log.Printf("Failed to update status for phone %s to disconnected: %v", phone, err)
-		}
-		d.mu.Lock()
+		exclude = true
 	}
-
 	state.cooldownUntil = time.Now().Add(cooldown)
 	d.cooldowns[phone] = state
 	d.mu.Unlock()
 
-	log.Printf("[dispatcher] Cooldown updated for %s: failures=%d, until=%v", phone, state.consecutiveFailures, state.cooldownUntil)
+	if exclude {
+		log.Printf("[dispatcher] Account %s failed 5 consecutive times, marking as disconnected in DB", phone)
+		if err := d.accountsRepo.UpdateStatusByPhone(ctx, phone, domain.AccountStatusDisconnected); err != nil {
+			log.Printf("Failed to update status for phone %s to disconnected: %v", phone, err)
+		}
+	}
+	log.Printf("[dispatcher] Cooldown updated for %s: failures=%d, until=%v", phone, failures, state.cooldownUntil)
+	return exclude
 }
 
 func (d *Dispatcher) recordSuccess(phone string) {
@@ -187,7 +288,6 @@ func (d *Dispatcher) isPastSendWindow(now time.Time, plannedAt time.Time) bool {
 		localPlanned.Year(), localPlanned.Month(), localPlanned.Day(),
 		d.windowEndHour, 0, 0, 0, d.location,
 	)
-	// Don't send if we're past that day's window end, or job itself is at/after window end.
 	if !localPlanned.Before(plannedDayEnd) {
 		return true
 	}
@@ -196,7 +296,6 @@ func (d *Dispatcher) isPastSendWindow(now time.Time, plannedAt time.Time) bool {
 		!localNow.Before(plannedDayEnd) {
 		return true
 	}
-	// Planned for a previous day that already ended.
 	if localPlanned.Before(time.Date(
 		localNow.Year(), localNow.Month(), localNow.Day(),
 		0, 0, 0, 0, d.location,

@@ -54,4 +54,24 @@ async def init_db() -> None:
                     )
                 )
 
+            res = connection.execute(text("PRAGMA table_info(account_groups)"))
+            group_columns = [row[1] for row in res.fetchall()]
+            if group_columns and "proxy_id" not in group_columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE account_groups ADD COLUMN proxy_id VARCHAR(36) REFERENCES proxies(id) ON DELETE SET NULL"
+                    )
+                )
+            migrations = {
+                "name": "ALTER TABLE account_groups ADD COLUMN name VARCHAR(128) NOT NULL DEFAULT ''",
+                "status": "ALTER TABLE account_groups ADD COLUMN status VARCHAR(16) NOT NULL DEFAULT 'enabled'",
+                "start_at": "ALTER TABLE account_groups ADD COLUMN start_at DATETIME",
+                "days": "ALTER TABLE account_groups ADD COLUMN days INTEGER NOT NULL DEFAULT 1",
+                "end_date": "ALTER TABLE account_groups ADD COLUMN end_date VARCHAR(10)",
+                "comm_id": "ALTER TABLE account_groups ADD COLUMN comm_id INTEGER",
+            }
+            for col, ddl in migrations.items():
+                if group_columns and col not in group_columns:
+                    connection.execute(text(ddl))
+
         await conn.run_sync(_migrate_db)

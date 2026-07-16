@@ -78,24 +78,45 @@ async def cb_account_detail(callback: CallbackQuery) -> None:
         return
     _, phone, status = target
 
-    # Check assigned proxy
-    from utils.database import AccountRepository, ProxyRepository
+    # Proxy comes from the account's group (if any)
+    from utils.database import AccountRepository, GroupRepository, ProxyRepository
     account = await AccountRepository().get_by_id(account_id)
     proxy_text = ""
-    proxy_id = None
-    if account and account.proxy_id:
-        proxy_id = account.proxy_id
-        proxy = await ProxyRepository().get_by_id(proxy_id)
+    group_repo = GroupRepository()
+    group_id = await group_repo.get_group_id_for_account(account_id)
+    if group_id is not None:
+        group = await group_repo.get_by_id(group_id)
+        if group and group.proxy_id:
+            proxy = await ProxyRepository().get_by_id(group.proxy_id)
+            if proxy:
+                proxy_text = (
+                    f"\n🌐 Прокси группы #{group_id}: <b>{proxy.name}</b> "
+                    f"(<code>{proxy.host}:{proxy.port}</code>)"
+                )
+        else:
+            proxy_text = f"\n👥 Группа #{group_id} (без прокси)"
+    elif account and account.proxy_id:
+        # legacy account-level binding (read-only)
+        proxy = await ProxyRepository().get_by_id(account.proxy_id)
         if proxy:
-            proxy_text = f"\n🌐 Прокси: <b>{proxy.name}</b> (<code>{proxy.host}:{proxy.port}</code>)"
+            proxy_text = (
+                f"\n🌐 Прокси (устаревшая привязка к аккаунту): "
+                f"<b>{proxy.name}</b>"
+            )
 
-    status_emoji = "✅" if status == "active" else "⚠️"
+    status_emoji = {
+        "active": "✅",
+        "warmup": "🔥",
+    }.get(status, "⚠️")
+    status_label = {
+        "warmup": "в прогреве (занят группой)",
+    }.get(status, status)
     text = (
-        f"Статус: <code>{status}</code> {status_emoji}\n\n"
+        f"Статус: <code>{status_label}</code> {status_emoji}\n\n"
         f"Номер: <b>{mask_phone(phone)}</b>"
         f"{proxy_text}"
     )
-    await callback.message.edit_text(text, reply_markup=account_detail_kb(account_id, proxy_id))
+    await callback.message.edit_text(text, reply_markup=account_detail_kb(account_id))
     await callback.answer()
 
 

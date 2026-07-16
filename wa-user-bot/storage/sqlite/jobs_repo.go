@@ -280,3 +280,141 @@ func (r *JobsRepo) RescheduleJob(ctx context.Context, jobID int64, newPlannedAt 
 	}
 	return nil
 }
+
+// CancelJobsInvolvingAccount cancels all pending/sending jobs where the account
+// is sender or receiver. Other accounts' pairs keep running.
+func (r *JobsRepo) CancelJobsInvolvingAccount(ctx context.Context, accountID int64, reason string) (int64, error) {
+	if reason == "" {
+		reason = "cancelled: account excluded from dialogue"
+	}
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE message_jobs
+		SET status = ?, last_error = ?, updated_at = ?
+		WHERE status IN (?, ?)
+		  AND (sender_account_id = ? OR receiver_account_id = ?)
+	`, domain.JobStatusCancelled, reason, time.Now().UTC(),
+		domain.JobStatusPending, domain.JobStatusSending,
+		accountID, accountID)
+	if err != nil {
+		return 0, fmt.Errorf("cancel jobs involving account %d: %w", accountID, err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
+// ListCommIDsInvolvingAccount returns distinct comm_ids with pending/sending jobs
+// for the given account (as sender or receiver).
+func (r *JobsRepo) ListCommIDsInvolvingAccount(ctx context.Context, accountID int64) ([]int64, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT DISTINCT comm_id
+		FROM message_jobs
+		WHERE status IN (?, ?)
+		  AND (sender_account_id = ? OR receiver_account_id = ?)
+		ORDER BY comm_id
+	`, domain.JobStatusPending, domain.JobStatusSending, accountID, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("list comms involving account %d: %w", accountID, err)
+	}
+	defer rows.Close()
+
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// GetAccountOrderForComm returns account IDs in ring order (first appearance in jobs).
+func (r *JobsRepo) GetAccountOrderForComm(ctx context.Context, commID int64) ([]int64, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT sender_account_id, receiver_account_id
+		FROM message_jobs
+		WHERE comm_id = ?
+		ORDER BY run_date, step_no, id
+	`, commID)
+	if err != nil {
+		return nil, fmt.Errorf("get account order for comm %d: %w", commID, err)
+	}
+	defer rows.Close()
+
+	seen := make(map[int64]struct{})
+	order := make([]int64, 0)
+	add := func(id int64) {
+		if id == 0 {
+			return
+		}
+		if _, ok := seen[id]; ok {
+			return
+		}
+		seen[id] = struct{}{}
+		order = append(order, id)
+	}
+	for rows.Next() {
+		var sender, receiver int64
+		if err := rows.Scan(&sender, &receiver); err != nil {
+			return nil, err
+		}
+		add(sender)
+		add(receiver)
+	}
+	return order, rows.Err()
+}
+
+// ListPendingRunDates returns run_date strings that still have pending/sending jobs.
+func (r *JobsRepo) ListPendingRunDates(ctx context.Context, commID int64) ([]string, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT DISTINCT run_date
+		FROM message_jobs
+		WHERE comm_id = ? AND status IN (?, ?)
+		ORDER BY run_date
+	`, commID, domain.JobStatusPending, domain.JobStatusSending)
+	if err != nil {
+		return nil, fmt.Errorf("list pending run dates for comm %d: %w", commID, err)
+	}
+	defer rows.Close()
+
+	var dates []string
+	for rows.Next() {
+		var d string
+		if err := rows.Scan(&d); err != nil {
+			return nil, err
+		}
+		dates = append(dates, d)
+	}
+	return dates, rows.Err()
+}
+
+func (r *JobsRepo) CancelPendingForComm(ctx context.Context, commID int64, reason string) (int64, error) {
+	if reason == "" {
+		reason = "cancelled: ring rebuild"
+	}
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE message_jobs
+		SET status = ?, last_error = ?, updated_at = ?
+		WHERE comm_id = ? AND status IN (?, ?)
+	`, domain.JobStatusCancelled, reason, time.Now().UTC(),
+		commID, domain.JobStatusPending, domain.JobStatusSending)
+	if err != nil {
+		return 0, fmt.Errorf("cancel pending for comm %d: %w", commID, err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
+func (r *JobsRepo) MaxStepNo(ctx context.Context, commID int64, runDate string) (int, error) {
+	var max sql.NullInt64
+	err := r.db.QueryRowContext(ctx, `
+		SELECT MAX(step_no) FROM message_jobs WHERE comm_id = ? AND run_date = ?
+	`, commID, runDate).Scan(&max)
+	if err != nil {
+		return 0, fmt.Errorf("max step for comm %d date %s: %w", commID, runDate, err)
+	}
+	if !max.Valid {
+		return 0, nil
+	}
+	return int(max.Int64), nil
+}

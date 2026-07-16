@@ -1,11 +1,17 @@
-from utils.database import AccountRepository
+from utils.database import AccountRepository, GroupRepository
 from utils.wa_auth import normalize_phone, remove_session
 
 
 async def get_session_accounts() -> list[tuple[int, str, str]]:
+    """Return (id, phone, status). Accounts in an active group get status 'warmup'."""
     repo = AccountRepository()
     accounts = await repo.get_all()
-    return [(a.id, a.phone, a.status) for a in accounts]
+    busy = await GroupRepository().list_account_ids_in_active_groups()
+    rows: list[tuple[int, str, str]] = []
+    for a in accounts:
+        status = "warmup" if a.id in busy and a.status == "active" else a.status
+        rows.append((a.id, a.phone, status))
+    return rows
 
 
 def mask_phone(phone: str) -> str:
