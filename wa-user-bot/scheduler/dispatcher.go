@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -153,7 +154,16 @@ func (d *Dispatcher) DispatchDue(ctx context.Context, now time.Time) error {
 		}
 
 		if err := d.sender.SendText(ctx, senderAccount.Phone, receiverAccount.Phone, job.MessageText); err != nil {
-			if isFatalSendError(err) || d.recordFailure(ctx, senderAccount.Phone) {
+			if isFatalSendError(err) {
+				d.markAdminSessionLost(ctx, senderAccount.Phone)
+				for _, id := range d.excludeAccountFromDialogue(ctx, senderAccount.AccountID, senderAccount.Phone,
+					fmt.Sprintf("cancelled: send failed (%v)", err)) {
+					rebuiltComms[id] = struct{}{}
+				}
+				continue
+			}
+			if d.recordFailure(ctx, senderAccount.Phone) {
+				d.markAdminSessionLost(ctx, senderAccount.Phone)
 				for _, id := range d.excludeAccountFromDialogue(ctx, senderAccount.AccountID, senderAccount.Phone,
 					fmt.Sprintf("cancelled: send failed (%v)", err)) {
 					rebuiltComms[id] = struct{}{}
@@ -161,6 +171,10 @@ func (d *Dispatcher) DispatchDue(ctx context.Context, now time.Time) error {
 				continue
 			}
 			d.markFailed(ctx, job.ID, err)
+			log.Printf(
+				"[dispatcher] send failed job=%d %s → %s: %v",
+				job.ID, senderAccount.Phone, receiverAccount.Phone, err,
+			)
 			continue
 		}
 
@@ -169,6 +183,11 @@ func (d *Dispatcher) DispatchDue(ctx context.Context, now time.Time) error {
 		if err := d.jobsRepo.MarkSent(ctx, job.ID, time.Now().UTC()); err != nil {
 			return fmt.Errorf("mark job %d as sent: %w", job.ID, err)
 		}
+		log.Printf(
+			"[dispatcher] sent ok job=%d comm=%d step=%d %s → %s",
+			job.ID, job.CommID, job.StepNo,
+			senderAccount.Phone, receiverAccount.Phone,
+		)
 	}
 
 	return nil
@@ -259,6 +278,19 @@ func (d *Dispatcher) recordFailure(ctx context.Context, phone string) bool {
 	}
 	log.Printf("[dispatcher] Cooldown updated for %s: failures=%d, until=%v", phone, failures, state.cooldownUntil)
 	return exclude
+}
+
+func (d *Dispatcher) markAdminSessionLost(ctx context.Context, phone string) {
+	if d.adminRepo == nil {
+		return
+	}
+	if err := d.adminRepo.SetAccountStatusByPhone(ctx, phone, "revoked"); err != nil {
+		if err != sql.ErrNoRows {
+			log.Printf("[dispatcher] mark admin account %s revoked: %v", phone, err)
+		}
+		return
+	}
+	log.Printf("[dispatcher] admin account %s marked revoked (session lost)", phone)
 }
 
 func (d *Dispatcher) recordSuccess(phone string) {

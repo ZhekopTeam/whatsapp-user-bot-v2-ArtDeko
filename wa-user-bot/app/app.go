@@ -3,8 +3,10 @@ package app
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"my-whatsapp-bot/wa-user-bot/api"
@@ -90,11 +92,32 @@ func New(ctx context.Context, settings *config.Settings) (*App, error) {
 		20,
 	)
 
-	// Status updates + drop logged-out accounts from pending dialogue immediately.
-	// Transient Disconnected is handled on next send attempt (avoids killing jobs on brief flaps).
+	// Status updates in runtime DB + mirror session loss to admin Telegram bot DB.
 	manager.OnStatusChange = func(phone, status string) {
 		if err := accountsRepo.UpdateStatusByPhone(context.Background(), phone, status); err != nil {
 			log.Printf("update account status for phone %s: %v", phone, err)
+		}
+		if adminProxyRepo != nil {
+			switch status {
+			case domain.AccountStatusBlocked, domain.AccountStatusFailed:
+				if err := adminProxyRepo.SetAccountStatusByPhone(
+					context.Background(), phone, "revoked",
+				); err != nil {
+					if !errors.Is(err, sql.ErrNoRows) && !strings.Contains(err.Error(), "no rows") {
+						log.Printf("mark admin account %s as revoked: %v", phone, err)
+					}
+				} else {
+					log.Printf("admin account %s marked revoked (session lost)", phone)
+				}
+			case domain.AccountStatusReady:
+				if err := adminProxyRepo.SetAccountStatusByPhone(
+					context.Background(), phone, "active",
+				); err != nil {
+					if !errors.Is(err, sql.ErrNoRows) && !strings.Contains(err.Error(), "no rows") {
+						log.Printf("restore admin account %s as active: %v", phone, err)
+					}
+				}
+			}
 		}
 		if status == domain.AccountStatusBlocked || status == domain.AccountStatusFailed {
 			dispatcher.ExcludeAccountByPhone(

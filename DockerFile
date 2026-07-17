@@ -47,6 +47,8 @@ ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/admin-tg-bot \
     WHATSAPP_BIN=/app/wa-user-bot \
+    ADMIN_DB_PATH=/admin-tg-bot/data/wa_bot_accounts.db \
+    DATABASE_PATH=/admin-tg-bot/data/wa_bot_accounts.db \
     TZ=UTC
 
 ENTRYPOINT ["/app/wa-user-bot"]

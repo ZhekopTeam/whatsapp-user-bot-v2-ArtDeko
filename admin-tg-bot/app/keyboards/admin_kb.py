@@ -15,6 +15,12 @@ def main_menu_kb(*, show_admins: bool = False) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def back_to_main_menu_kb() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="← Меню", callback_data="menu:main")
+    return builder.as_markup()
+
+
 def communications_menu_kb(
     groups: list[tuple[int, str, int]],
     *,
@@ -187,7 +193,9 @@ def group_complete_done_kb() -> InlineKeyboardMarkup:
 def accounts_list_kb(accounts: list[tuple[int, str, str]]) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for account_id, phone, status in accounts:
-        if status == "warmup":
+        if status == "revoked":
+            prefix = "💀 "
+        elif status == "warmup":
             prefix = "🔥 "
         elif status != "active":
             prefix = "⚠️ "

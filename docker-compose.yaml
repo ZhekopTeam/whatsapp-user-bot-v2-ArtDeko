@@ -5,28 +5,37 @@ x-bot-common: &bot-common
   image: zhekop/wa-user-bot-v2-artdeko:main
   env_file:
     - .env
-  environment:
+  environment: &bot-env
     TZ: Europe/Moscow
+    # Canonical admin SQLite (same file for Go api + Python bot).
+    ADMIN_DB_PATH: /admin-tg-bot/data/wa_bot_accounts.db
+    DATABASE_PATH: /admin-tg-bot/data/wa_bot_accounts.db
+
 services:
   api:
     <<: *bot-common
     working_dir: /app
     entrypoint: ["/app/wa-user-bot"]
+    environment:
+      <<: *bot-env
     ports:
       - "5001:5001"
     volumes:
-      - ./sessions:/app/sessions
+      - ./data:/admin-tg-bot/data
       - ./data:/app/data
+      - ./sessions:/app/sessions
     restart: unless-stopped
+
   bot:
     <<: *bot-common
     working_dir: /admin-tg-bot
     entrypoint: ["python", "main.py"]
     environment:
+      <<: *bot-env
       WHATSAPP_API_URL: "http://api:5001"
     volumes:
-      - ./sessions:/admin-tg-bot/sessions
       - ./data:/admin-tg-bot/data
+      - ./sessions:/admin-tg-bot/sessions
     depends_on:
       - api
     restart: unless-stopped

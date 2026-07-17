@@ -9,7 +9,12 @@ from aiogram.fsm.context import FSMContext
 from app.keyboards import account_detail_kb, accounts_list_kb, main_menu_kb
 from utils.access import is_admin, is_owner
 from utils.logger import logger
-from utils.session_repo import delete_session, get_session_accounts, mask_phone
+from utils.session_repo import (
+    account_status_label,
+    delete_session,
+    get_session_accounts,
+    mask_phone,
+)
 from utils.sheets_sync import sync_accounts
 
 router_info = Router(name="info")
@@ -78,43 +83,42 @@ async def cb_account_detail(callback: CallbackQuery) -> None:
         return
     _, phone, status = target
 
-    # Proxy comes from the account's group (if any)
-    from utils.database import AccountRepository, GroupRepository, ProxyRepository
+    from utils.database import AccountRepository, ProxyRepository
     account = await AccountRepository().get_by_id(account_id)
     proxy_text = ""
-    group_repo = GroupRepository()
-    group_id = await group_repo.get_group_id_for_account(account_id)
-    if group_id is not None:
-        group = await group_repo.get_by_id(group_id)
-        if group and group.proxy_id:
-            proxy = await ProxyRepository().get_by_id(group.proxy_id)
-            if proxy:
-                proxy_text = (
-                    f"\n🌐 Прокси группы #{group_id}: <b>{proxy.name}</b> "
-                    f"(<code>{proxy.host}:{proxy.port}</code>)"
-                )
-        else:
-            proxy_text = f"\n👥 Группа #{group_id} (без прокси)"
-    elif account and account.proxy_id:
-        # legacy account-level binding (read-only)
+    if account and account.proxy_id:
         proxy = await ProxyRepository().get_by_id(account.proxy_id)
         if proxy:
             proxy_text = (
-                f"\n🌐 Прокси (устаревшая привязка к аккаунту): "
-                f"<b>{proxy.name}</b>"
+                f"\n🌐 Прокси: <b>{proxy.name}</b> "
+                f"(<code>{proxy.host}:{proxy.port}</code>)"
             )
 
     status_emoji = {
         "active": "✅",
         "warmup": "🔥",
+        "revoked": "💀",
     }.get(status, "⚠️")
-    status_label = {
-        "warmup": "в прогреве (занят группой)",
-    }.get(status, status)
+    status_label = account_status_label(status)
+
+    if status == "revoked":
+        phone_line = (
+            f"Номер (нажмите, чтобы скопировать):\n"
+            f"<code>{phone}</code>"
+        )
+        hint = (
+            "\n\n<i>Сессия WhatsApp недействительна. "
+            "Скопируйте номер, удалите аккаунт и авторизуйте заново.</i>"
+        )
+    else:
+        phone_line = f"Номер: <b>{mask_phone(phone)}</b>"
+        hint = ""
+
     text = (
-        f"Статус: <code>{status_label}</code> {status_emoji}\n\n"
-        f"Номер: <b>{mask_phone(phone)}</b>"
+        f"Статус: <b>{status_label}</b> {status_emoji}\n\n"
+        f"{phone_line}"
         f"{proxy_text}"
+        f"{hint}"
     )
     await callback.message.edit_text(text, reply_markup=account_detail_kb(account_id))
     await callback.answer()

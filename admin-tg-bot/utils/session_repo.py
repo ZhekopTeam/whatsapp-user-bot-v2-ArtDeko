@@ -9,9 +9,22 @@ async def get_session_accounts() -> list[tuple[int, str, str]]:
     busy = await GroupRepository().list_account_ids_in_active_groups()
     rows: list[tuple[int, str, str]] = []
     for a in accounts:
-        status = "warmup" if a.id in busy and a.status == "active" else a.status
+        if a.status == "revoked":
+            status = "revoked"
+        elif a.id in busy and a.status == "active":
+            status = "warmup"
+        else:
+            status = a.status
         rows.append((a.id, a.phone, status))
     return rows
+
+
+def account_status_label(status: str) -> str:
+    return {
+        "active": "активен",
+        "warmup": "в прогреве",
+        "revoked": "сессия слетела",
+    }.get(status, status)
 
 
 def mask_phone(phone: str) -> str:

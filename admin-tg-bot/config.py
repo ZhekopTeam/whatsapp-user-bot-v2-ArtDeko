@@ -26,7 +26,7 @@ class Settings(BaseSettings):
 
     DB_ECHO: bool = Field(os.getenv("DB_ECHO", "false").lower() == "true")
     DATABASE_PATH: str = Field(
-        os.getenv("DATABASE_PATH", "data/wa_bot_accounts.db")
+        os.getenv("DATABASE_PATH", "/admin-tg-bot/data/wa_bot_accounts.db")
     )
 
     RUNTIME_DB_PATH: str = Field(

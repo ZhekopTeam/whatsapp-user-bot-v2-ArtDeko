@@ -19,6 +19,7 @@ from app.keyboards import (
     group_finished_list_kb,
     group_time_options_kb,
     main_menu_kb,
+    back_to_main_menu_kb,
 )
 from config import settings
 from utils.access import is_admin, is_owner
@@ -616,7 +617,7 @@ async def _create_and_schedule(
         logger.exception("Failed to save group dialogue jobs")
         await message.answer(
             f"❌ Ошибка сохранения в базу: {e}",
-            reply_markup=main_menu_kb(show_admins=is_owner(message.from_user.id)),
+            reply_markup=back_to_main_menu_kb(),
         )
 
     await state.clear()
