@@ -104,10 +104,10 @@ To sync configurations properly, your Google Spreadsheet must contain two tabs w
 | 1 | +79991234567 |
 | 2 | +79997654321 |
 
-### Tab 2: `WhatsApp Communications`
-| comm_id | account_1 | account_2 | start_date | end_date | enabled | count_days |
+### Tab 2: `WhatsApp Communications` (display-only report)
+| comm_id | accounts | start_date | end_date | enabled | count_days | name |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| 1001 | 1 | 2 | 25.06.2026 | 30.06.2026 | true | 5 |
+| 1001 | 1, 2, 3 | 2026-06-25 | 2026-06-30 | true | 5 | Warmup A |
 
 ---
 

@@ -35,6 +35,11 @@ async def main() -> None:
     await load_db_admins()
     logger.info(f"all admins: {all_admin_ids()}")
 
+    from utils.sheets_sync import sync_accounts, sync_communications
+
+    asyncio.create_task(sync_accounts())
+    asyncio.create_task(sync_communications())
+
     wa_auth = WhatsAppAuth()
 
     dp.include_router(app.router_main)

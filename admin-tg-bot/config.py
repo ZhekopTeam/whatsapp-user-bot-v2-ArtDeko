@@ -50,15 +50,29 @@ class Settings(BaseSettings):
         os.getenv("SCOPES", '["https://www.googleapis.com/auth/spreadsheets"]')
     )
     SHEET_ACCOUNTS: str = Field(
-        os.getenv("SHEET_ACCOUNTS", "WhatsApp Accounts"))
+        os.getenv("SHEET_ACCOUNTS", os.getenv("ACCOUNTS_SHEET_NAME", "WhatsApp Accounts"))
+    )
+    SHEET_COMMUNICATIONS: str = Field(
+        os.getenv(
+            "SHEET_COMMUNICATIONS",
+            os.getenv("COMMUNICATIONS_SHEET_NAME", "WhatsApp Communications"),
+        )
+    )
     ACCOUNTS_HEADER: list[str] = Field(
         os.getenv(
             "ACCOUNTS_HEADER",
             '["account_id", "ph_number", "jid", "status", "created_at"]',
         )
     )
+    COMMUNICATIONS_HEADER: list[str] = Field(
+        os.getenv(
+            "COMMUNICATIONS_HEADER",
+            '["comm_id", "accounts", "start_date", "end_date", '
+            '"enabled", "count_days", "name"]',
+        )
+    )
 
-    @field_validator("SCOPES", "ACCOUNTS_HEADER", mode="before")
+    @field_validator("SCOPES", "ACCOUNTS_HEADER", "COMMUNICATIONS_HEADER", mode="before")
     @classmethod
     def _parse_list(cls, v: object) -> object:
         if isinstance(v, str):

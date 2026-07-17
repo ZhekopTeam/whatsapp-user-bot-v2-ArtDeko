@@ -52,21 +52,6 @@ func (s *SyncService) Sync(ctx context.Context) error {
 		return fmt.Errorf("sync accounts: %w", err)
 	}
 
-	communicationRows, err := s.client.ReadRange(ctx, s.communicationsSheet+"!A:G")
-	if err != nil {
-		_ = s.syncStateRepo.MarkFailure(ctx, syncSourceName, err.Error())
-		return err
-	}
-	communications, err := MapCommunications(communicationRows)
-	if err != nil {
-		_ = s.syncStateRepo.MarkFailure(ctx, syncSourceName, err.Error())
-		return err
-	}
-	if err := s.communicationsRepo.UpsertMany(ctx, communications); err != nil {
-		_ = s.syncStateRepo.MarkFailure(ctx, syncSourceName, err.Error())
-		return fmt.Errorf("sync communications: %w", err)
-	}
-
 	if err := s.syncStateRepo.MarkSuccess(ctx, syncSourceName); err != nil {
 		return err
 	}

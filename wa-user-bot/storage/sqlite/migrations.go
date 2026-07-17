@@ -22,6 +22,7 @@ var schemaStatements = []string{
 		end_date TEXT NOT NULL,
 		enabled BOOLEAN NOT NULL,
 		count_days INTEGER NOT NULL,
+		name TEXT NOT NULL,
 		sheet_hash TEXT NOT NULL,
 		synced_at TIMESTAMP NOT NULL,
 		created_at TIMESTAMP NOT NULL,
@@ -78,6 +79,40 @@ func Migrate(db *sql.DB) error {
 		if _, err := db.Exec(statement); err != nil {
 			return fmt.Errorf("apply migration: %w", err)
 		}
+	}
+	// Existing DBs created before "name" was added — CREATE IF NOT EXISTS won't alter them.
+	if err := ensureColumn(db, "communications", "name", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func ensureColumn(db *sql.DB, table, column, definition string) error {
+	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return fmt.Errorf("pragma table_info(%s): %w", table, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return fmt.Errorf("scan table_info(%s): %w", table, err)
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	ddl := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, definition)
+	if _, err := db.Exec(ddl); err != nil {
+		return fmt.Errorf("add column %s.%s: %w", table, column, err)
 	}
 	return nil
 }

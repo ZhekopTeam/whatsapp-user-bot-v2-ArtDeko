@@ -52,16 +52,25 @@ func MapAccounts(rows [][]interface{}) ([]domain.Account, error) {
 
 func MapCommunications(rows [][]interface{}) ([]domain.Communication, error) {
 	if len(rows) == 0 {
-		return nil, fmt.Errorf("communications sheet is empty")
+		return nil, fmt.Errorf("sheet is empty")
 	}
 
 	headers := parseHeaders(rows[0])
+	// Telegram-bot report formats — not planner input.
+	if _, hasGroup := headers["group_id"]; hasGroup {
+		return nil, fmt.Errorf("report format (group_id) — not imported into planner")
+	}
+	if _, hasAccounts := headers["accounts"]; hasAccounts {
+		return nil, fmt.Errorf("report format (accounts) — not imported into planner")
+	}
 	columns := []string{"comm_id", "account_1", "account_2", "start_date", "end_date", "enabled", "count_days"}
 	for _, column := range columns {
 		if _, ok := headers[column]; !ok {
 			return nil, fmt.Errorf("communications sheet must contain %s", column)
 		}
 	}
+	// name is optional (added later for group label in Sheets)
+	nameIdx, hasName := headers["name"]
 
 	communications := make([]domain.Communication, 0, len(rows)-1)
 	now := time.Now().UTC()
@@ -90,6 +99,10 @@ func MapCommunications(rows [][]interface{}) ([]domain.Communication, error) {
 		if err != nil || countDays < 0 {
 			countDays = 0
 		}
+		groupName := ""
+		if hasName {
+			groupName = getStringCell(row, nameIdx)
+		}
 
 		communications = append(communications, domain.Communication{
 			CommID:    commID,
@@ -99,6 +112,7 @@ func MapCommunications(rows [][]interface{}) ([]domain.Communication, error) {
 			EndDate:   endDate,
 			Enabled:   parseBoolCell(row, headers["enabled"]),
 			CountDays: int(countDays),
+			Name:      groupName,
 			SheetHash: hashRow(row),
 			SyncedAt:  now,
 			CreatedAt: now,

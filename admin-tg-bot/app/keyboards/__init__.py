@@ -21,6 +21,7 @@ from .admin_kb import (
     proxy_list_kb,
     proxy_detail_kb,
     proxy_cancel_kb,
+    back_to_main_menu_kb,
 )
 
 __all__ = [

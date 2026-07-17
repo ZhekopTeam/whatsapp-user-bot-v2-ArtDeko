@@ -12,6 +12,7 @@ type Communication struct {
 	EndDate   time.Time
 	Enabled   bool
 	CountDays int
+	Name      string
 	SheetHash string
 	SyncedAt  time.Time
 	CreatedAt time.Time

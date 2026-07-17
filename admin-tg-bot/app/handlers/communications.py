@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import asyncio
 import json
 import os
 import random
@@ -34,6 +35,7 @@ from utils.database import (
 from utils.FSM import CreateGroup
 from utils.logger import logger
 from utils.session_repo import mask_phone
+from utils.sheets_sync import sync_communications
 
 router_comm = Router(name="comm")
 
@@ -613,6 +615,7 @@ async def _create_and_schedule(
             "\n".join(report),
             reply_markup=main_menu_kb(show_admins=is_owner(message.from_user.id)),
         )
+        asyncio.create_task(sync_communications())
     except Exception as e:
         logger.exception("Failed to save group dialogue jobs")
         await message.answer(
@@ -730,6 +733,7 @@ async def cb_group_del(callback: CallbackQuery) -> None:
     text, markup = await _groups_menu_payload()
     await callback.message.edit_text(text, reply_markup=markup)
     await callback.answer("Группа удалена")
+    asyncio.create_task(sync_communications())
 
 
 @router_comm.callback_query(F.data.startswith("group:complete:"))
@@ -755,6 +759,7 @@ async def cb_group_complete(callback: CallbackQuery) -> None:
         reply_markup=group_complete_done_kb(),
     )
     await callback.answer()
+    asyncio.create_task(sync_communications())
 
 
 # ── Create group: name → accounts → time → days → proxy → confirm ─────────────
